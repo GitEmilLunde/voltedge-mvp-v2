@@ -1,30 +1,49 @@
-CREATE TABLE IF NOT EXISTS turbines (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    name            VARCHAR(100) NOT NULL,
-    location        VARCHAR(255) NOT NULL,
+-- VoltEdge MVP — Initialiser begge databaser ved opstart
+CREATE DATABASE IF NOT EXISTS charging_session_db;
+CREATE DATABASE IF NOT EXISTS forecast_db;
 
-    -- Value Object: Health_Status
-    health_status   ENUM('Healthy', 'Degraded', 'Critical') NOT NULL DEFAULT 'Healthy',
-    temperature     FLOAT,
-    vibration       FLOAT,
+GRANT ALL PRIVILEGES ON charging_session_db.* TO 'voltedge'@'%';
+GRANT ALL PRIVILEGES ON forecast_db.* TO 'voltedge'@'%';
+FLUSH PRIVILEGES;
 
-    -- Value Object: Anomaly_Detected
-    anomaly_detected    BOOLEAN DEFAULT FALSE,
-    anomaly_description VARCHAR(255),
+-- ──────────────────────────────────────────────
+-- Charging Session Database
+-- ──────────────────────────────────────────────
+USE charging_session_db;
 
-    -- Value Object: Operating_Hours
-    operating_hours FLOAT DEFAULT 0,
-
-    -- Value Object: Weather_Forecast
-    wind_speed      FLOAT,
-    forecast_temp   FLOAT,
-
-    updated_at      DATETIME DEFAULT NOW() ON UPDATE NOW(),
-    created_at      DATETIME DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS charging_sessions (
+    session_id         VARCHAR(36)  PRIMARY KEY,
+    charger_id         VARCHAR(50)  NOT NULL,
+    connector_id       VARCHAR(50)  NOT NULL,
+    contract_id        VARCHAR(50)  NOT NULL,
+    charger_type       ENUM('fast','normal') NOT NULL,
+    price_area         ENUM('DK1','DK2') NOT NULL,
+    status             ENUM('PENDING','AUTHORIZED','ACTIVE','COMPLETED','FAULTED') DEFAULT 'PENDING',
+    session_start_time DATETIME,
+    session_end_time   DATETIME,
+    meter_start        FLOAT,
+    meter_end          FLOAT,
+    energy_delivered   FLOAT,        -- beregnet: meter_end - meter_start
+    spot_price_dkk     FLOAT,        -- låst ved sessionstart fra Energidataservice
+    idle_fee           FLOAT,        -- 10 DKK hvis session > 3t i 08:00-20:00
+    session_cost       FLOAT,        -- energy_delivered × spot_price_dkk + idle_fee
+    stop_reason        ENUM('Normal','Timeout','Fault','Administrative'),
+    created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Testdata
-INSERT INTO turbines (name, location, health_status, temperature, vibration, operating_hours, wind_speed, forecast_temp)
-VALUES
-    ('Turbine-DK-001', 'Esbjerg Offshore', 'Healthy',  38.2, 1.4, 4821.5, 11.2, 14.0),
-    ('Turbine-DK-002', 'Horns Rev',        'Degraded', 67.5, 4.1, 9203.0,  8.7, 12.5);
+-- ──────────────────────────────────────────────
+-- Forecast Database
+-- ──────────────────────────────────────────────
+USE forecast_db;
+
+CREATE TABLE IF NOT EXISTS forecast_results (
+    forecast_id                VARCHAR(36) PRIMARY KEY,
+    charger_id                 VARCHAR(50) NOT NULL,
+    generated_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
+    prediction_window_hours    INT DEFAULT 24,
+    load_index                 FLOAT,
+    temperature                FLOAT,
+    wind_speed                 FLOAT,
+    spot_price_forecast        FLOAT,
+    historical_session_volume  INT
+);

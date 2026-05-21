@@ -1,38 +1,76 @@
 version: "3.9"
 
+networks:
+  voltedge-network:
+    driver: bridge
+
 services:
   db:
-    image: mysql:${MYSQL_VERSION:-8.0}
-    container_name: ${COMPOSE_PROJECT_NAME:-iot}_mysql
+    image: mysql:8.0
+    container_name: voltedge_mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d
+    ports:
+      - "3306:3306"
+    networks:
+      - voltedge-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  api:
-    image: ${IMAGE_NAME}:${IMAGE_TAG:-latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-iot}_api
+  charging-session-service:
+    build:
+      context: ./charging-session-service
+    container_name: voltedge_charging_session
     restart: always
+    env_file: .env
     environment:
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-3306}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
+      MYSQL_HOST: ${MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_SESSION_DB: ${MYSQL_SESSION_DB}
+      ENERGIDATASERVICE_URL: ${ENERGIDATASERVICE_URL}
+      FORECAST_SERVICE_URL: ${FORECAST_SERVICE_URL}
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "${API_EXTERNAL_PORT:-5005}:5000"
+      - "5001:5001"
+    networks:
+      - voltedge-network
+
+  load-forecast-service:
+    build:
+      context: ./load-forecast-service
+    container_name: voltedge_load_forecast
+    restart: always
+    env_file: .env
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_FORECAST_DB: ${MYSQL_FORECAST_DB}
+      MYSQL_SESSION_DB: ${MYSQL_SESSION_DB}
+      DMI_API_URL: ${DMI_API_URL}
+      ENERGIDATASERVICE_URL: ${ENERGIDATASERVICE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5002:5002"
+    networks:
+      - voltedge-network
 
 volumes:
   db_data:
