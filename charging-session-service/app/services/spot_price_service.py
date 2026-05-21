@@ -37,26 +37,33 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
         for record in records:
             try:
                 record_time = datetime.fromisoformat(record.get("TimeDK", ""))
-                if record_time == session_hour:
-                    price_kwh = record["DayAheadPriceDKK"] / 1000.0
+                price_dkk = record.get("DayAheadPriceDKK")
+                if record_time == session_hour and price_dkk is not None:
+                    price_kwh = price_dkk / 1000.0
                     _LAST_KNOWN_PRICE[price_area] = price_kwh
                     logger.info(
                         "Spotpris %s kl. %s: %.4f DKK/kWh",
                         price_area, session_hour, price_kwh
                     )
                     return price_kwh
-            except (ValueError, KeyError):
+            except (ValueError, KeyError) as e:
+                logger.debug("Fejl ved behandling af record: %s", e)
                 continue
 
         # Ingen eksakt time-match — brug første tilgængelige post
         if records:
-            price_kwh = records[0].get("DayAheadPriceDKK", 0) / 1000.0
-            _LAST_KNOWN_PRICE[price_area] = price_kwh
-            logger.warning(
-                "Ingen eksakt match for %s, bruger første post: %.4f DKK/kWh",
-                session_hour, price_kwh
-            )
-            return price_kwh
+            first_record = records[0]
+            price_dkk = first_record.get("DayAheadPriceDKK")
+            if price_dkk is not None:
+                price_kwh = price_dkk / 1000.0
+                _LAST_KNOWN_PRICE[price_area] = price_kwh
+                logger.warning(
+                    "Ingen eksakt match for %s, bruger første post: %.4f DKK/kWh",
+                    session_hour, price_kwh
+                )
+                return price_kwh
+            else:
+                logger.error("Første record mangler 'DayAheadPriceDKK'")
 
     except requests.RequestException as exc:
         logger.error("Energidataservice utilgængeligt: %s", exc)
