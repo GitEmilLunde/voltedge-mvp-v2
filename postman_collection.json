@@ -1,0 +1,243 @@
+{
+  "info": {
+    "name": "VoltEdge MVP — Demo",
+    "description": "Komplet demo-flow: start → autorisér → meter → stop → forecast",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:5001" },
+    { "key": "forecast_url", "value": "http://localhost:5002" },
+    { "key": "session_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Start session (PENDING)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "pm.collectionVariables.set('session_id', json.session_id);",
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "pm.test('session_id findes', () => pm.expect(json.session_id).to.be.a('string'));",
+              "console.log('Session ID:', json.session_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions/start",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"charger_id\": \"CHR-DEMO-001\",\n  \"connector_id\": \"CON-A\",\n  \"contract_id\": \"CONTRACT-FLEET-01\",\n  \"charger_type\": \"fast\",\n  \"price_area\": \"DK1\"\n}"
+        }
+      }
+    },
+    {
+      "name": "2. Autorisér session (AUTHORIZED)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Status er AUTHORIZED', () => {",
+              "  pm.expect(pm.response.json().status).to.equal('AUTHORIZED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/sessions/{{session_id}}/authorize"
+      }
+    },
+    {
+      "name": "3. Sæt måler (ACTIVE)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Status er ACTIVE', () => {",
+              "  pm.expect(pm.response.json().status).to.equal('ACTIVE');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions/{{session_id}}/meter",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"meter_value\": 12500.0\n}"
+        }
+      }
+    },
+    {
+      "name": "4. Stop session (COMPLETED + prisberegning)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Status er COMPLETED', () => pm.expect(json.status).to.equal('COMPLETED'));",
+              "pm.test('energy_delivered beregnet', () => pm.expect(json.energy_delivered).to.be.above(0));",
+              "pm.test('session_cost beregnet', () => pm.expect(json.session_cost).to.be.above(0));",
+              "console.log('Energi:', json.energy_delivered, 'kWh');",
+              "console.log('Pris:', json.session_cost, 'DKK');",
+              "console.log('Idle fee:', json.idle_fee, 'DKK');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions/{{session_id}}/stop",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"meter_end\": 12567.5,\n  \"stop_reason\": \"Normal\"\n}"
+        }
+      }
+    },
+    {
+      "name": "5. Hent specifik session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('session_id matcher', () => {",
+              "  pm.expect(pm.response.json().session_id).to.equal(pm.collectionVariables.get('session_id'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/sessions/{{session_id}}"
+      }
+    },
+    {
+      "name": "6. Hent alle sessioner",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Returnerer array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/sessions"
+      }
+    },
+    {
+      "name": "7. Test idle fee — lang session i spidstid",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "console.log('Idle fee session oprettet:', pm.response.json().session_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions/start",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"charger_id\": \"CHR-DEMO-002\",\n  \"connector_id\": \"CON-B\",\n  \"contract_id\": \"CONTRACT-PRIV-05\",\n  \"charger_type\": \"normal\",\n  \"price_area\": \"DK2\"\n}"
+        }
+      }
+    },
+    {
+      "name": "8. Test ulovlig overgang (fejl 400)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400 — ulovlig overgang', () => pm.response.to.have.status(400));",
+              "pm.test('Fejlbesked indeholder overgang', () => {",
+              "  pm.expect(pm.response.json().error).to.include('Ulovlig overgang');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/sessions/{{session_id}}/authorize",
+        "description": "Forsøg at autorisere en allerede COMPLETED session — skal give 400"
+      }
+    },
+    {
+      "name": "9. Forecast — trigger manuelt",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "pm.test('forecast_id findes', () => pm.expect(pm.response.json().forecast_id).to.be.a('string'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{forecast_url}}/forecast/trigger",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"demo-manual-trigger\",\n  \"charger_id\": \"CHR-DEMO-001\"\n}"
+        }
+      }
+    },
+    {
+      "name": "10. Forecast — hent seneste for ladepunkt",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "var json = pm.response.json();",
+              "pm.test('load_index er et tal', () => pm.expect(json.load_index).to.be.a('number'));",
+              "console.log('LoadIndex:', json.load_index);",
+              "console.log('Temperatur:', json.temperature, '°C');",
+              "console.log('Spotpris forecast:', json.spot_price_forecast, 'DKK/kWh');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{forecast_url}}/forecast/CHR-DEMO-001"
+      }
+    }
+  ]
+}

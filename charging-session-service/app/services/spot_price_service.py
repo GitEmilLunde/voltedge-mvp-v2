@@ -25,7 +25,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
     try:
         params = {
             "filter": f'{{"PriceArea":["{price_area}"]}}',
-            "sort": "TimeDK asc",
+            "sort": "TimeDK desc",
             "limit": 24,
         }
         response = requests.get(base_url, params=params, timeout=5)
@@ -38,7 +38,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
             try:
                 record_time = datetime.fromisoformat(record.get("TimeDK", ""))
                 if record_time == session_hour:
-                    price_kwh = record["SpotPriceDKK"] / 1000.0
+                    price_kwh = record["DayAheadPriceDKK"] / 1000.0
                     _LAST_KNOWN_PRICE[price_area] = price_kwh
                     logger.info(
                         "Spotpris %s kl. %s: %.4f DKK/kWh",
@@ -50,7 +50,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
 
         # Ingen eksakt time-match — brug første tilgængelige post
         if records:
-            price_kwh = records[0].get("SpotPriceDKK", 0) / 1000.0
+            price_kwh = records[0].get("DayAheadPriceDKK", 0) / 1000.0
             _LAST_KNOWN_PRICE[price_area] = price_kwh
             logger.warning(
                 "Ingen eksakt match for %s, bruger første post: %.4f DKK/kWh",
