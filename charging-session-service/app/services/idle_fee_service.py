@@ -4,7 +4,7 @@ Idle fee domænelogik for VoltEdge ladesessioner.
 Regel:
   - Hvis session_start_time er i 08:00–20:00 (spidstid)
     OG sessionens varighed er > 180 minutter
-  → idle_fee = 10,00 DKK
+  → idle_fee = 100,00 DKK
   Ellers → idle_fee = 0,00 DKK
 
 Idle fee kompenserer ladepunktsoperatøren når et køretøj
@@ -16,7 +16,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-IDLE_FEE_AMOUNT   = 10.00   # DKK
+IDLE_FEE_AMOUNT   = 100.00  # DKK
 PEAK_START_HOUR   = 8       # 08:00 inklusiv
 PEAK_END_HOUR     = 20      # 20:00 eksklusiv
 MAX_FREE_MINUTES  = 180     # grænse: > 180 min giver fee
