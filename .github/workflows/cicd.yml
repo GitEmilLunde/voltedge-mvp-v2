@@ -1,4 +1,4 @@
-name: CICD
+name: VoltEdge CI/CD
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    name: Unit tests — charging-session-service
     runs-on: ubuntu-latest
 
     steps:
@@ -22,18 +23,14 @@ jobs:
       - name: Installer dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Tjek at koden kan kompilere
-        run: |
-          python -m compileall .
+          pip install -r charging-session-service/requirements.txt
 
       - name: Kør pytest
-        run: |
-          pytest
+        working-directory: charging-session-service
+        run: pytest tests/ -v
 
-  build-and-push-image:
-    # Kør kun ved push til main (ikke ved pull_request)
+  build:
+    name: Byg Docker images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
@@ -52,9 +49,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Byg og push Docker image
+      - name: Byg og push charging-session-service
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./charging-session-service
           push: true
-          tags: ghcr.io/gitemillunde/intelligent-iot-flask-api:latest
+          tags: ghcr.io/gitemillunde/voltedge-charging-session:latest
+
+      - name: Byg og push load-forecast-service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./load-forecast-service
+          push: true
+          tags: ghcr.io/gitemillunde/voltedge-load-forecast:latest
