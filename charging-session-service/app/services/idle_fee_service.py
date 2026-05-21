@@ -3,8 +3,9 @@ Idle fee domænelogik for VoltEdge ladesessioner.
 
 Regel:
   - Hvis session_start_time er i 08:00–20:00 (spidstid)
-    OG sessionens varighed er > 180 minutter
-  → idle_fee = 100,00 DKK
+    OG sessionens varighed er > 180 minutter (3 timers grace)
+  → 10 minutters buffer (ingen fee i bufferzonen)
+  → Herefter: 1,50 DKK/min
   Ellers → idle_fee = 0,00 DKK
 
 Idle fee kompenserer ladepunktsoperatøren når et køretøj
@@ -16,15 +17,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-IDLE_FEE_AMOUNT   = 100.00  # DKK
-PEAK_START_HOUR   = 8       # 08:00 inklusiv
-PEAK_END_HOUR     = 20      # 20:00 eksklusiv
-MAX_FREE_MINUTES  = 180     # grænse: > 180 min giver fee
+IDLE_GRACE_MINUTES      = 180   # 3 timer fri opladning
+IDLE_BUFFER_MINUTES     = 10    # 10 min buffer til at hente bilen
+IDLE_PEAK_START         = 8     # 08:00 inklusiv
+IDLE_PEAK_END           = 20    # 20:00 eksklusiv
+IDLE_FEE_PER_MINUTE     = 1.50  # kr/min
 
 
 def calculate_idle_fee(
     session_start_time: Optional[datetime],
-    session_end_time: Optional[datetime]
+    session_end_time: Optional[datetime],
 ) -> float:
     """
     Returnerer idle fee i DKK baseret på starttidspunkt og varighed.
@@ -35,18 +37,20 @@ def calculate_idle_fee(
     duration_minutes = (session_end_time - session_start_time).total_seconds() / 60
     start_hour = session_start_time.hour
 
-    is_peak = PEAK_START_HOUR <= start_hour < PEAK_END_HOUR
-    is_long = duration_minutes > MAX_FREE_MINUTES
+    is_peak = IDLE_PEAK_START <= start_hour < IDLE_PEAK_END
+    idle_minutes = duration_minutes - IDLE_GRACE_MINUTES - IDLE_BUFFER_MINUTES
 
-    if is_peak and is_long:
-        logger.info(
-            "Idle fee opkrævet: start=%02d:00 (spidstid), varighed=%.0f min > %d min",
-            start_hour, duration_minutes, MAX_FREE_MINUTES
+    if not is_peak or idle_minutes <= 0:
+        logger.debug(
+            "Ingen idle fee: spidstid=%s, idle_min=%.1f",
+            is_peak, max(idle_minutes, 0),
         )
-        return IDLE_FEE_AMOUNT
+        return 0.00
 
-    logger.debug(
-        "Ingen idle fee: spidstid=%s, lang_session=%s, varighed=%.0f min",
-        is_peak, is_long, duration_minutes
+    fee = round(idle_minutes * IDLE_FEE_PER_MINUTE, 2)
+
+    logger.info(
+        "Idle fee opkrævet: %.0f min idle × %.2f kr/min = %.2f DKK",
+        idle_minutes, IDLE_FEE_PER_MINUTE, fee,
     )
-    return 0.00
+    return fee

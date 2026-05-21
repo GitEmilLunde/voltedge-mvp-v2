@@ -37,7 +37,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
         for record in records:
             try:
                 record_time = datetime.fromisoformat(record.get("TimeDK", ""))
-                price_dkk = record.get("DayAheadPriceDKK")
+                price_dkk = record.get("SpotPriceDKK")
                 if record_time == session_hour and price_dkk is not None:
                     price_kwh = price_dkk / 1000.0
                     _LAST_KNOWN_PRICE[price_area] = price_kwh
@@ -53,7 +53,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
         # Ingen eksakt time-match — brug første tilgængelige post
         if records:
             first_record = records[0]
-            price_dkk = first_record.get("DayAheadPriceDKK")
+            price_dkk = first_record.get("SpotPriceDKK")
             if price_dkk is not None:
                 price_kwh = price_dkk / 1000.0
                 _LAST_KNOWN_PRICE[price_area] = price_kwh
@@ -63,7 +63,7 @@ def get_spot_price(price_area: str, session_start_time: datetime, base_url: str)
                 )
                 return price_kwh
             else:
-                logger.error("Første record mangler 'DayAheadPriceDKK'")
+                logger.error("Første record mangler 'SpotPriceDKK'")
 
     except requests.RequestException as exc:
         logger.error("Energidataservice utilgængeligt: %s", exc)

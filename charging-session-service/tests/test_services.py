@@ -69,13 +69,13 @@ class TestSessionLifecycle:
 # ──────────────────────────────────────────────
 
 class TestIdleFee:
-    """Idle fee opkræves kun i spidstid og ved session > 3 timer."""
+    """Idle fee: per-minut efter 3t grace + 10 min buffer, kun i spidstid."""
 
     def test_peak_over_3h_gives_fee(self):
-        # 10:00 start, 4 timers session → fee
+        # 4t session: 240 - 180 grace - 10 buffer = 50 min idle → 50 × 1.50 = 75.00 DKK
         start = datetime(2024, 6, 10, 10, 0)
         end = start + timedelta(hours=4)
-        assert calculate_idle_fee(start, end) == 10.00
+        assert calculate_idle_fee(start, end) == pytest.approx(75.00)
 
     def test_peak_under_3h_no_fee(self):
         # 10:00 start, 2 timers session → ingen fee
@@ -90,22 +90,28 @@ class TestIdleFee:
         assert calculate_idle_fee(start, end) == 0.00
 
     def test_exactly_180_minutes_no_fee(self):
-        # Præcis 180 min = IKKE over grænsen
+        # Præcis 180 min = inden for grace-perioden
         start = datetime(2024, 6, 10, 9, 0)
         end = start + timedelta(minutes=180)
         assert calculate_idle_fee(start, end) == 0.00
 
-    def test_181_minutes_in_peak_gives_fee(self):
-        # 181 min i spidstid → fee
+    def test_181_minutes_in_buffer_no_fee(self):
+        # 181 min er inde i 10 min bufferzonen → ingen fee endnu
         start = datetime(2024, 6, 10, 9, 0)
         end = start + timedelta(minutes=181)
-        assert calculate_idle_fee(start, end) == 10.00
+        assert calculate_idle_fee(start, end) == 0.00
+
+    def test_191_minutes_in_peak_gives_fee(self):
+        # 191 min = 1 min idle → 1 × 1.50 = 1.50 DKK
+        start = datetime(2024, 6, 10, 9, 0)
+        end = start + timedelta(minutes=191)
+        assert calculate_idle_fee(start, end) == pytest.approx(1.50)
 
     def test_start_at_peak_boundary_08(self):
-        # Præcis 08:00 er spidstid
+        # Præcis 08:00 er spidstid, 4t session → 50 min idle → 75.00 DKK
         start = datetime(2024, 6, 10, 8, 0)
         end = start + timedelta(hours=4)
-        assert calculate_idle_fee(start, end) == 10.00
+        assert calculate_idle_fee(start, end) == pytest.approx(75.00)
 
     def test_start_at_20_is_offpeak(self):
         # 20:00 er UDEN FOR spidstid (eksklusiv)
