@@ -9,12 +9,12 @@ USE charging_session_db;
 DELETE FROM charging_sessions WHERE charger_id LIKE 'DEMO-%';
 
 -- ──────────────────────────────────────────────
--- 1. Afsluttet normal session — DK1, fast lader
+-- 1. Afsluttet normal session — DK1
 -- ──────────────────────────────────────────────
 INSERT INTO charging_sessions VALUES (
     'demo-sess-001',
     'DEMO-CHR-001', 'CON-A', 'CONTRACT-FLEET-01',
-    'fast', 'DK1', 'COMPLETED',
+    'DK1', 'COMPLETED',
     '2024-06-10 08:15:00', '2024-06-10 09:45:00',
     12500.0, 12542.5,
     42.5,           -- energy_delivered kWh
@@ -26,12 +26,12 @@ INSERT INTO charging_sessions VALUES (
 );
 
 -- ──────────────────────────────────────────────
--- 2. Session MED idle fee — DK2, normal lader, > 3 timer i spidstid
+-- 2. Session MED idle fee — DK2, > 3 timer i spidstid
 -- ──────────────────────────────────────────────
 INSERT INTO charging_sessions VALUES (
     'demo-sess-002',
     'DEMO-CHR-002', 'CON-B', 'CONTRACT-PRIV-07',
-    'normal', 'DK2', 'COMPLETED',
+    'DK2', 'COMPLETED',
     '2024-06-10 09:00:00', '2024-06-10 13:30:00',
     8000.0, 8022.0,
     22.0,           -- energy_delivered kWh
@@ -48,7 +48,7 @@ INSERT INTO charging_sessions VALUES (
 INSERT INTO charging_sessions VALUES (
     'demo-sess-003',
     'DEMO-CHR-001', 'CON-A', 'CONTRACT-FLEET-01',
-    'fast', 'DK1', 'FAULTED',
+    'DK1', 'FAULTED',
     '2024-06-10 11:00:00', '2024-06-10 11:08:00',
     20100.0, 20100.0,
     0.0,            -- ingen energi leveret
@@ -65,7 +65,7 @@ INSERT INTO charging_sessions VALUES (
 INSERT INTO charging_sessions VALUES (
     'demo-sess-004',
     'DEMO-CHR-003', 'CON-C', 'CONTRACT-TAXI-12',
-    'fast', 'DK1', 'COMPLETED',
+    'DK1', 'COMPLETED',
     '2024-06-10 23:00:00', '2024-06-11 03:30:00',
     5500.0, 5594.0,
     94.0,           -- stort batteri, 4.5t opladning om natten
@@ -82,7 +82,7 @@ INSERT INTO charging_sessions VALUES (
 INSERT INTO charging_sessions VALUES (
     'demo-sess-005',
     'DEMO-CHR-002', 'CON-B', 'CONTRACT-FLEET-01',
-    'fast', 'DK2', 'ACTIVE',
+    'DK2', 'ACTIVE',
     NOW(), NULL,
     33000.0, NULL,
     NULL,
@@ -98,7 +98,7 @@ INSERT INTO charging_sessions VALUES (
 INSERT INTO charging_sessions VALUES (
     'demo-sess-006',
     'DEMO-CHR-004', 'CON-D', 'CONTRACT-PRIV-03',
-    'normal', 'DK1', 'PENDING',
+    'DK1', 'PENDING',
     NOW(), NULL,
     NULL, NULL, NULL,
     0.6300,
@@ -112,7 +112,6 @@ INSERT INTO charging_sessions VALUES (
 SELECT
     session_id,
     charger_id,
-    charger_type,
     price_area,
     status,
     energy_delivered,

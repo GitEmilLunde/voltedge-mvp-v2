@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     charger_id         VARCHAR(50)  NOT NULL,
     connector_id       VARCHAR(50)  NOT NULL,
     contract_id        VARCHAR(50)  NOT NULL,
-    charger_type       ENUM('fast','normal') NOT NULL,
     price_area         ENUM('DK1','DK2') NOT NULL,
     status             ENUM('PENDING','AUTHORIZED','ACTIVE','COMPLETED','FAULTED') DEFAULT 'PENDING',
     session_start_time DATETIME,

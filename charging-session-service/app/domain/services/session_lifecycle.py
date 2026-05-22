@@ -7,7 +7,7 @@ Lovlige overgange:
   ACTIVE     → COMPLETED
   ACTIVE     → FAULTED
 
-Alle andre overgange kaster ValueError og afvises af API-laget.
+Alle andre overgange kaster ValueError og afvises af aggregatet.
 """
 
 VALID_TRANSITIONS: dict[str, list[str]] = {
@@ -20,10 +20,7 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
 
 
 def transition(current_status: str, new_status: str) -> str:
-    """
-    Udfører statustransition hvis overgangen er lovlig.
-    Returnerer new_status ved succes — kaster ValueError ellers.
-    """
+    """Udfører statustransition hvis overgangen er lovlig — kaster ValueError ellers."""
     allowed = VALID_TRANSITIONS.get(current_status, [])
     if new_status not in allowed:
         raise ValueError(

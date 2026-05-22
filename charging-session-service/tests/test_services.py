@@ -1,21 +1,20 @@
 """
-Unit tests for VoltEdge Charging Session domain services.
+Unit tests for VoltEdge Charging Session domænelag.
 Alle tests kører isoleret — ingen database eller netværkskald.
 """
 import sys
 import os
 
-# Sørg for at vi finder app-pakken uanset working directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from app.services.session_lifecycle import transition
-from app.services.idle_fee_service import calculate_idle_fee
-from app.services.cost_calculator import calculate_session_cost
-from app.services.spot_price_service import get_spot_price
+from app.domain.services.session_lifecycle import transition
+from app.domain.services.idle_fee_policy import IdleFeePolicy
+from app.domain.value_objects.session_cost import SessionCost
+from app.infrastructure.external.spot_price_client import SpotPriceClient
 
 
 # ──────────────────────────────────────────────
@@ -25,7 +24,6 @@ from app.services.spot_price_service import get_spot_price
 class TestSessionLifecycle:
     """Lovlige og ulovlige statusovergange."""
 
-    # Lovlige overgange
     def test_pending_to_authorized(self):
         assert transition("PENDING", "AUTHORIZED") == "AUTHORIZED"
 
@@ -38,7 +36,6 @@ class TestSessionLifecycle:
     def test_active_to_faulted(self):
         assert transition("ACTIVE", "FAULTED") == "FAULTED"
 
-    # Ulovlige overgange
     def test_pending_to_active_raises(self):
         with pytest.raises(ValueError):
             transition("PENDING", "ACTIVE")
@@ -65,104 +62,104 @@ class TestSessionLifecycle:
 
 
 # ──────────────────────────────────────────────
-# IDLE FEE
+# IDLE FEE POLICY
 # ──────────────────────────────────────────────
 
-class TestIdleFee:
-    """Idle fee: per-minut efter 3t grace + 10 min buffer, kun i spidstid."""
+class TestIdleFeePolicy:
+    """Idle-gebyr: per-minut efter 3t grace + 10 min buffer, kun i spidstid."""
+
+    def setup_method(self):
+        self.policy = IdleFeePolicy()
 
     def test_peak_over_3h_gives_fee(self):
         # 4t session: 240 - 180 grace - 10 buffer = 50 min idle → 50 × 1.50 = 75.00 DKK
         start = datetime(2024, 6, 10, 10, 0)
         end = start + timedelta(hours=4)
-        assert calculate_idle_fee(start, end) == pytest.approx(75.00)
+        assert self.policy.calculate(start, end) == pytest.approx(75.00)
 
     def test_peak_under_3h_no_fee(self):
-        # 10:00 start, 2 timers session → ingen fee
         start = datetime(2024, 6, 10, 10, 0)
         end = start + timedelta(hours=2)
-        assert calculate_idle_fee(start, end) == 0.00
+        assert self.policy.calculate(start, end) == 0.00
 
     def test_offpeak_over_3h_no_fee(self):
-        # 22:00 start (udenfor spidstid), 5 timers session → ingen fee
         start = datetime(2024, 6, 10, 22, 0)
         end = start + timedelta(hours=5)
-        assert calculate_idle_fee(start, end) == 0.00
+        assert self.policy.calculate(start, end) == 0.00
 
     def test_exactly_180_minutes_no_fee(self):
-        # Præcis 180 min = inden for grace-perioden
         start = datetime(2024, 6, 10, 9, 0)
         end = start + timedelta(minutes=180)
-        assert calculate_idle_fee(start, end) == 0.00
+        assert self.policy.calculate(start, end) == 0.00
 
     def test_181_minutes_in_buffer_no_fee(self):
-        # 181 min er inde i 10 min bufferzonen → ingen fee endnu
         start = datetime(2024, 6, 10, 9, 0)
         end = start + timedelta(minutes=181)
-        assert calculate_idle_fee(start, end) == 0.00
+        assert self.policy.calculate(start, end) == 0.00
 
     def test_191_minutes_in_peak_gives_fee(self):
         # 191 min = 1 min idle → 1 × 1.50 = 1.50 DKK
         start = datetime(2024, 6, 10, 9, 0)
         end = start + timedelta(minutes=191)
-        assert calculate_idle_fee(start, end) == pytest.approx(1.50)
+        assert self.policy.calculate(start, end) == pytest.approx(1.50)
 
     def test_start_at_peak_boundary_08(self):
-        # Præcis 08:00 er spidstid, 4t session → 50 min idle → 75.00 DKK
         start = datetime(2024, 6, 10, 8, 0)
         end = start + timedelta(hours=4)
-        assert calculate_idle_fee(start, end) == pytest.approx(75.00)
+        assert self.policy.calculate(start, end) == pytest.approx(75.00)
 
     def test_start_at_20_is_offpeak(self):
-        # 20:00 er UDEN FOR spidstid (eksklusiv)
         start = datetime(2024, 6, 10, 20, 0)
         end = start + timedelta(hours=4)
-        assert calculate_idle_fee(start, end) == 0.00
+        assert self.policy.calculate(start, end) == 0.00
 
     def test_none_times_returns_zero(self):
-        assert calculate_idle_fee(None, None) == 0.00
+        assert self.policy.calculate(None, None) == 0.00
 
 
 # ──────────────────────────────────────────────
-# PRISBEREGNING
+# SESSION COST
 # ──────────────────────────────────────────────
 
-class TestCostCalculator:
+class TestSessionCost:
     """SessionCost = energy × spotpris + idle_fee."""
 
     def test_basic_calculation(self):
-        # 10 kWh × 0.5 DKK/kWh + 0 = 5.0 DKK
-        assert calculate_session_cost(10.0, 0.5, 0.0) == 5.0
+        cost = SessionCost.calculate(10.0, 0.5, 0.0)
+        assert cost.total_dkk == 5.0
 
     def test_with_idle_fee(self):
-        # 10 kWh × 0.5 + 10 idle = 15.0 DKK
-        assert calculate_session_cost(10.0, 0.5, 10.0) == 15.0
+        cost = SessionCost.calculate(10.0, 0.5, 10.0)
+        assert cost.total_dkk == 15.0
 
     def test_zero_energy_gives_idle_fee_only(self):
-        assert calculate_session_cost(0.0, 0.5, 10.0) == 10.0
+        cost = SessionCost.calculate(0.0, 0.5, 10.0)
+        assert cost.total_dkk == 10.0
 
     def test_high_spot_price(self):
-        # 50 kWh × 2.0 DKK/kWh = 100.0 DKK
-        assert calculate_session_cost(50.0, 2.0, 0.0) == 100.0
+        cost = SessionCost.calculate(50.0, 2.0, 0.0)
+        assert cost.total_dkk == 100.0
 
-    def test_none_energy_returns_zero(self):
-        assert calculate_session_cost(None, 0.5, 0.0) == 0.00
+    def test_energy_cost_and_idle_fee_are_accessible(self):
+        cost = SessionCost.calculate(10.0, 1.0, 5.0)
+        assert cost.energy_cost_dkk == pytest.approx(10.0)
+        assert cost.idle_fee_dkk == pytest.approx(5.0)
+        assert cost.total_dkk == pytest.approx(15.0)
 
-    def test_none_spot_price_returns_zero(self):
-        assert calculate_session_cost(10.0, None, 0.0) == 0.00
-
-    def test_none_idle_fee_treated_as_zero(self):
-        assert calculate_session_cost(10.0, 1.0, None) == 10.0
+    def test_immutability(self):
+        cost = SessionCost.calculate(10.0, 0.5, 0.0)
+        with pytest.raises(Exception):
+            cost.energy_cost_dkk = 99.0  # frozen dataclass
 
 
 # ──────────────────────────────────────────────
-# SPOTPRIS — FALLBACK
+# SPOT PRICE CLIENT — FALLBACK
 # ──────────────────────────────────────────────
 
-class TestSpotPriceService:
-    """Spotpristjenesten falder tilbage til cached pris ved API-fejl."""
+class TestSpotPriceClient:
+    """SpotPriceClient falder tilbage til cached pris ved API-fejl."""
 
-    @patch("app.services.spot_price_service.requests.get")
+    @patch("app.infrastructure.external.spot_price_client.requests.get")
     def test_api_success_converts_mwh_to_kwh(self, mock_get):
         session_hour = datetime(2024, 6, 10, 10, 0, 0)
         mock_response = MagicMock()
@@ -172,27 +169,27 @@ class TestSpotPriceService:
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
 
-        price = get_spot_price("DK1", session_hour, "http://test.energi")
-        assert price == pytest.approx(0.5)
+        client = SpotPriceClient("http://test.energi")
+        price = client.fetch("DK1", session_hour)
+        assert price.dkk_per_kwh == pytest.approx(0.5)
+        assert price.price_area == "DK1"
 
-    @patch("app.services.spot_price_service.requests.get")
+    @patch("app.infrastructure.external.spot_price_client.requests.get")
     def test_api_failure_returns_last_known(self, mock_get):
         import requests as req
-        import app.services.spot_price_service as svc
-
-        svc._LAST_KNOWN_PRICE["DK1"] = 0.75
         mock_get.side_effect = req.RequestException("timeout")
 
-        price = get_spot_price("DK1", datetime(2024, 6, 10, 10), "http://test.energi")
-        assert price == 0.75
+        client = SpotPriceClient("http://test.energi")
+        client._cache["DK1"] = 0.75
 
-    @patch("app.services.spot_price_service.requests.get")
+        price = client.fetch("DK1", datetime(2024, 6, 10, 10))
+        assert price.dkk_per_kwh == pytest.approx(0.75)
+
+    @patch("app.infrastructure.external.spot_price_client.requests.get")
     def test_api_failure_default_fallback_when_no_cache(self, mock_get):
         import requests as req
-        import app.services.spot_price_service as svc
-
-        svc._LAST_KNOWN_PRICE.pop("DK2", None)
         mock_get.side_effect = req.RequestException("timeout")
 
-        price = get_spot_price("DK2", datetime(2024, 6, 10, 10), "http://test.energi")
-        assert price == pytest.approx(0.50)
+        client = SpotPriceClient("http://test.energi")
+        price = client.fetch("DK2", datetime(2024, 6, 10, 10))
+        assert price.dkk_per_kwh == pytest.approx(0.50)

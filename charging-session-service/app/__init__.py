@@ -1,8 +1,6 @@
 import logging
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-
-db = SQLAlchemy()
+from .extensions import db
 
 
 def create_app(config=None):
@@ -22,10 +20,15 @@ def create_app(config=None):
     db.init_app(app)
 
     with app.app_context():
-        from .models import ChargingSession  # noqa: F401
+        from .domain.aggregates.charging_session import ChargingSession  # noqa: F401
         db.create_all()
 
-        from .routes import sessions_bp
+        from .infrastructure.external.spot_price_client import SpotPriceClient
+        app.extensions["spot_price_client"] = SpotPriceClient(
+            app.config.get("ENERGIDATASERVICE_URL", "")
+        )
+
+        from .presentation.routes import sessions_bp
         app.register_blueprint(sessions_bp)
 
     return app
