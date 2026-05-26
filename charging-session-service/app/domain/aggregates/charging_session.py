@@ -1,110 +1,291 @@
 """
-ChargingSession — aggregate root for VoltEdge's opladnings-bounded context.
+Aggregat-rod: ChargingSession — Charging Session Bounded Context.
 
-Invarianter:
-  - Status følger den tilladte tilstandsmaskine:
-      PENDING → AUTHORIZED → ACTIVE → COMPLETED | FAULTED
-  - Spotpris låses ved oprettelse og ændres aldrig
-  - Energilevering = max(0, meter_end - meter_start)
-  - SessionCost = energiomkostning + idle_fee
+Al adgang til session-data og -adfærd sker UDELUKKENDE via ChargingSessionID.
+Domæneregler håndhæves her — aldrig i applikations- eller infrastrukturlaget.
+
+Event Storming kommandoer realiseret:
+  - Opret Session        → opret_session()
+  - Autoriser Session    → autoriser()
+  - Start Opladning      → start_opladning()
+  - Stop Opladning       → stop_opladning()
+  - Registrer Fejl       → registrer_fejl()
 """
-import uuid
-from datetime import datetime
 
-from app.extensions import db
-from app.domain.value_objects import EnergyMeasurement, SessionCost
-from app.domain.services.session_lifecycle import transition
-from app.domain.services.idle_fee_policy import IdleFeePolicy
+from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import List, Optional
+from uuid import uuid4
+
+from app.domain.value_objects.value_objects import (
+    AppliedSpotPrice,
+    ChargerType,
+    EnergyDelivered,
+    EndTime,
+    EventTime,
+    EventType,
+    SessionCost,
+    StartTime,
+    UserID,
+)
+
+
+# ---------------------------------------------------------------------------
+# Undtagelse
+# ---------------------------------------------------------------------------
 
 class SessionNotFound(Exception):
-    pass
+    """
+    Hæves når session-data ikke kan lokaliseres via ChargingSessionID.
+
+    Event Storming: svarende til 'Session ikke fundet' read model fejl.
+    """
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"Session ikke fundet: {session_id}")
+        self.session_id = session_id
 
 
-class ChargingSession(db.Model):
-    __tablename__ = "charging_sessions"
+# ---------------------------------------------------------------------------
+# Tilstandsmaskine (intern til aggregatet)
+# ---------------------------------------------------------------------------
 
-    # ─── Identitet ──────────────────────────────────────────────
-    session_id = db.Column(
-        db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+class SessionStatus(Enum):
+    """
+    Gyldige tilstande i sessionens livscyklus.
+    Tilstandsmaskine:
+        AFVENTER → AUTORISERET → AKTIV → AFSLUTTET
+                                 AKTIV → FEJLET
 
-    # ─── Kerneatributter ────────────────────────────────────────
-    charger_id   = db.Column(db.String(50), nullable=False)
-    connector_id = db.Column(db.String(50), nullable=False)
-    contract_id  = db.Column(db.String(50), nullable=False)
-    price_area   = db.Column(db.Enum("DK1", "DK2"), nullable=False)
+    Ingen andre overgange er tilladt — håndhæves i aggregatet.
+    """
+    AFVENTER = "AFVENTER"
+    AUTORISERET = "AUTORISERET"
+    AKTIV = "AKTIV"
+    AFSLUTTET = "AFSLUTTET"
+    FEJLET = "FEJLET"
 
-    # ─── Livscyklus ─────────────────────────────────────────────
-    status = db.Column(
-        db.Enum("PENDING", "AUTHORIZED", "ACTIVE", "COMPLETED", "FAULTED"),
-        default="PENDING",
-    )
-    session_start_time = db.Column(db.DateTime)
-    session_end_time   = db.Column(db.DateTime)
-    stop_reason        = db.Column(db.Enum("Normal", "Timeout", "Fault", "Administrative"))
 
-    # ─── Energi og pris (spotpris låst ved sessionstart) ────────
-    meter_start      = db.Column(db.Float)
-    meter_end        = db.Column(db.Float)
-    energy_delivered = db.Column(db.Float)
-    spot_price_dkk   = db.Column(db.Float)
-    idle_fee         = db.Column(db.Float)
-    session_cost     = db.Column(db.Float)
+# ---------------------------------------------------------------------------
+# Event-entitet (logges på sessionen)
+# ---------------------------------------------------------------------------
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+@dataclass
+class Event:
+    """
+    Entitet der repræsenterer et domæne-event logget under sessionens livscyklus.
 
-    # ─── Domæneadfærd ───────────────────────────────────────────
+    Felter (præcist som defineret i DDD-modellen):
+        event_type — klassifikation (EventType value object)
+        event_time — tidsstempel (EventTime value object)
 
-    def authorize(self) -> None:
-        """PENDING → AUTHORIZED."""
-        self.status = transition(self.status, "AUTHORIZED")
+    Database-nøgler (event_id, session_id) genereres udelukkende i
+    infrastrukturlaget — de er ikke en del af domænet.
 
-    def activate(self, meter_start: float) -> None:
-        """AUTHORIZED → ACTIVE. Registrerer startmålerstand."""
-        self.status = transition(self.status, "ACTIVE")
-        self.meter_start = meter_start
+    Event Storming: audit trail for SESSION_AUTHORIZED, SESSION_STARTED,
+                    CHARGING_STOPPED, UNEXPECTED_STOPPAGE.
+    """
+    event_type: EventType
+    event_time: EventTime
 
-    def complete(self, meter_end: float, idle_fee_policy: IdleFeePolicy) -> SessionCost:
-        """ACTIVE → COMPLETED. Beregner og returnerer den endelige SessionCost."""
-        self.status = transition(self.status, "COMPLETED")
-        self.session_end_time = datetime.utcnow()
-        self.meter_end = meter_end
 
-        energy = EnergyMeasurement(self.meter_start or 0.0, meter_end)
-        idle_fee_dkk = idle_fee_policy.calculate(self.session_start_time, self.session_end_time)
-        cost = SessionCost.calculate(energy.delivered_kwh, self.spot_price_dkk or 0.0, idle_fee_dkk)
+# ---------------------------------------------------------------------------
+# Aggregat-rod identifikator
+# ---------------------------------------------------------------------------
 
-        self.energy_delivered = energy.delivered_kwh
-        self.idle_fee = cost.idle_fee_dkk
-        self.session_cost = cost.total_dkk
+@dataclass(frozen=True)
+class ChargingSessionID:
+    """
+    Aggregat-rod-identifikator for ChargingSession.
+    Al adgang til session-data sker via denne type.
+    Placeret i aggregates-mappen — ikke i value_objects.
 
-        return cost
+    Event Storming: reference i alle kommandoer og events.
+    """
+    value: str
 
-    def fault(self, reason: str = "Fault") -> None:
-        """ACTIVE → FAULTED. Registrerer fejl og afslutter sessionen."""
-        self.status = transition(self.status, "FAULTED")
-        self.session_end_time = datetime.utcnow()
-        self.stop_reason = reason
+    def __str__(self) -> str:
+        return self.value
 
-    # ─── Serialisering ──────────────────────────────────────────
+    @classmethod
+    def ny(cls) -> "ChargingSessionID":
+        """Genererer et nyt unikt ChargingSessionID."""
+        return cls(value=str(uuid4()))
 
-    def to_dict(self) -> dict:
-        return {
-            "session_id":         self.session_id,
-            "charger_id":         self.charger_id,
-            "connector_id":       self.connector_id,
-            "contract_id":        self.contract_id,
-            "price_area":         self.price_area,
-            "status":             self.status,
-            "session_start_time": self.session_start_time.isoformat() if self.session_start_time else None,
-            "session_end_time":   self.session_end_time.isoformat()   if self.session_end_time   else None,
-            "meter_start":        self.meter_start,
-            "meter_end":          self.meter_end,
-            "energy_delivered":   self.energy_delivered,
-            "spot_price_dkk":     self.spot_price_dkk,
-            "idle_fee":           self.idle_fee,
-            "session_cost":       self.session_cost,
-            "stop_reason":        self.stop_reason,
-            "created_at":         self.created_at.isoformat() if self.created_at else None,
-        }
+
+# ---------------------------------------------------------------------------
+# Aggregat-rod: ChargingSession
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ChargingSession:
+    """
+    Aggregat-rod for Charging Session Bounded Context.
+    Håndhæver alle domæneregler for sessionens livscyklus.
+
+    Invarianter:
+      1. AppliedSpotPrice låses præcist én gang ved SESSION_AUTHORIZED.
+      2. SessionCost beregnes KUN ved CHARGING_STOPPED som
+         EnergyDelivered × AppliedSpotPrice.
+      3. EnergyDelivered er aldrig negativ (håndhæves af value object).
+      4. Tilstandsovergange følger tilstandsmaskinen — ingen genveje.
+
+    Event Storming kommandoer → metoder:
+      Opret Session     → ChargingSession.opret_session(...)  [factory]
+      Autoriser Session → .autoriser(applied_spot_price)
+      Start Opladning   → .start_opladning()
+      Stop Opladning    → .stop_opladning(energy_delivered)
+      Registrer Fejl    → .registrer_fejl()
+    """
+
+    session_id: ChargingSessionID
+    user_id: UserID
+    charger_id: str
+    charger_type: ChargerType
+    price_area: str                # 'DK1' eller 'DK2' — gemt som streng, domænet kender ikke PriceArea-enum
+    status: SessionStatus
+    events: List[Event] = field(default_factory=list)
+
+    # Sættes ved SESSION_AUTHORIZED
+    applied_spot_price: Optional[AppliedSpotPrice] = None
+
+    # Sættes ved SESSION_STARTED
+    start_time: Optional[StartTime] = None
+
+    # Sættes ved CHARGING_STOPPED
+    end_time: Optional[EndTime] = None
+    energy_delivered: Optional[EnergyDelivered] = None
+    session_cost: Optional[SessionCost] = None
+
+    # Domæne-events til dispatch (renses efter håndtering)
+    _pending_events: List[object] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # Factory-metode (Event Storming command: 'Opret Session')
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def opret_session(
+        cls,
+        user_id: UserID,
+        charger_id: str,
+        charger_type: ChargerType,
+        price_area: str,
+    ) -> "ChargingSession":
+        """
+        Factory-metode: opretter en ny session i AFVENTER-tilstand.
+        price_area gemmes på sessionen så SpotPriceClient kan filtrere korrekt ved autorisering.
+
+        Args:
+            price_area: 'DK1' eller 'DK2'
+
+        Event Storming command: 'Opret Session'.
+        """
+        session_id = ChargingSessionID.ny()
+        return cls(
+            session_id=session_id,
+            user_id=user_id,
+            charger_id=charger_id,
+            charger_type=charger_type,
+            price_area=price_area,
+            status=SessionStatus.AFVENTER,
+        )
+
+    # ------------------------------------------------------------------
+    # Tilstandsovergange
+    # ------------------------------------------------------------------
+
+    def autoriser(self, applied_spot_price: AppliedSpotPrice) -> None:
+        """
+        Overgår sessionen fra AFVENTER til AUTORISERET.
+        Låser AppliedSpotPrice — må ALDRIG overskrives efter dette punkt.
+
+        Invariant: Kan kun kaldes fra AFVENTER-tilstand.
+
+        Event Storming command: 'Autoriser Session'.
+        Event Storming event:   'SESSION_AUTHORIZED'.
+        """
+        if self.status != SessionStatus.AFVENTER:
+            raise ValueError(
+                f"Kan kun autorisere fra AFVENTER, nuværende tilstand: {self.status.value}"
+            )
+        self.applied_spot_price = applied_spot_price
+        self.status = SessionStatus.AUTORISERET
+        self._log_event(EventType.SESSION_AUTHORIZED)
+
+    def start_opladning(self) -> None:
+        """
+        Overgår sessionen fra AUTORISERET til AKTIV.
+        Sætter StartTime til nuværende tidspunkt.
+
+        Invariant: Kan kun kaldes fra AUTORISERET-tilstand.
+
+        Event Storming command: 'Start Opladning'.
+        Event Storming event:   'SESSION_STARTED'.
+        """
+        if self.status != SessionStatus.AUTORISERET:
+            raise ValueError(
+                f"Kan kun starte opladning fra AUTORISERET, nuværende tilstand: {self.status.value}"
+            )
+        self.start_time = StartTime(value=datetime.now(timezone.utc))
+        self.status = SessionStatus.AKTIV
+        self._log_event(EventType.SESSION_STARTED)
+
+    def stop_opladning(self, energy_delivered: EnergyDelivered) -> None:
+        """
+        Overgår sessionen fra AKTIV til AFSLUTTET.
+        Beregner SessionCost = EnergyDelivered × AppliedSpotPrice.
+
+        Invariant: Kan kun kaldes fra AKTIV-tilstand.
+        Invariant: applied_spot_price SKAL være låst (er garanteret af autoriser).
+        Invariant: EnergyDelivered ≥ 0 (håndhæves af value object).
+
+        Event Storming command: 'Stop Opladning'.
+        Event Storming event:   'CHARGING_STOPPED'.
+        """
+        if self.status != SessionStatus.AKTIV:
+            raise ValueError(
+                f"Kan kun stoppe opladning fra AKTIV, nuværende tilstand: {self.status.value}"
+            )
+        if self.applied_spot_price is None:
+            raise ValueError("AppliedSpotPrice er ikke låst — autoriser session først")
+
+        self.energy_delivered = energy_delivered
+        self.end_time = EndTime(value=datetime.now(timezone.utc))
+        self.session_cost = SessionCost(
+            value=round(energy_delivered.value * self.applied_spot_price.value, 4)
+        )
+        self.status = SessionStatus.AFSLUTTET
+        self._log_event(EventType.CHARGING_STOPPED)
+
+    def registrer_fejl(self) -> None:
+        """
+        Overgår sessionen fra AKTIV til FEJLET.
+        Kan kun forekomme under aktiv opladning.
+
+        Invariant: Kan kun kaldes fra AKTIV-tilstand.
+
+        Event Storming command: 'Registrer Fejl'.
+        Event Storming event:   'UNEXPECTED_STOPPAGE'.
+        """
+        if self.status != SessionStatus.AKTIV:
+            raise ValueError(
+                f"Kan kun registrere fejl fra AKTIV, nuværende tilstand: {self.status.value}"
+            )
+        self.end_time = EndTime(value=datetime.now(timezone.utc))
+        self.status = SessionStatus.FEJLET
+        self._log_event(EventType.UNEXPECTED_STOPPAGE)
+
+    # ------------------------------------------------------------------
+    # Privat hjælpemetode
+    # ------------------------------------------------------------------
+
+    def _log_event(self, event_type: EventType) -> None:
+        """Opretter og tilføjer et Event til sessionens audit trail."""
+        event = Event(
+            event_type=event_type,
+            event_time=EventTime(value=datetime.now(timezone.utc)),
+        )
+        self.events.append(event)

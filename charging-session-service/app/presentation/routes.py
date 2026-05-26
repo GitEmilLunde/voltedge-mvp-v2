@@ -1,142 +1,239 @@
 """
-HTTP-lag for ladesessioner.
-Validerer input og delegerer til SessionApplicationService.
+REST API — Charging Session Bounded Context.
+
+Præsentationslaget oversætter HTTP-requests til applikationsservice-kald
+og serialiserer domæne-objekter til JSON.
+
+Ingen domæneregler eller forretningslogik håndhæves her.
+
+Endpoints:
+  POST   /sessions                        — Opret Session
+  POST   /sessions/<id>/autoriser         — Autoriser Session
+  POST   /sessions/<id>/start             — Start Opladning
+  POST   /sessions/<id>/stop              — Stop Opladning
+  POST   /sessions/<id>/fejl              — Registrer Fejl
+  GET    /sessions/<id>                   — Hent Session
+  GET    /sessions                        — Hent alle Sessions
+  GET    /health                          — Sundhedstjek
 """
-import logging
 
-import requests as http_requests
-from flask import Blueprint, current_app, jsonify, request
+from __future__ import annotations
 
-from app.domain.aggregates.charging_session import SessionNotFound
-from app.domain.value_objects import PriceArea
-from app.infrastructure.external.spot_price_client import SpotPriceClient
-from app.infrastructure.repositories.session_repository import SessionRepository
-from app.application.session_service import SessionApplicationService
+from flask import Blueprint, Response, jsonify, request
 
-logger = logging.getLogger(__name__)
-sessions_bp = Blueprint("sessions", __name__)
+from app.application.session_application_service import SessionApplicationService
+from app.domain.aggregates.charging_session import ChargingSession, SessionNotFound
 
 
-def _get_service() -> SessionApplicationService:
-    spot_client: SpotPriceClient = current_app.extensions["spot_price_client"]
-    return SessionApplicationService(SessionRepository(), spot_client)
+def create_blueprint(service: SessionApplicationService) -> Blueprint:
+    """Factory-funktion der opretter Flask Blueprint med injiceret service."""
+    bp = Blueprint("sessions", __name__)
 
+    # ------------------------------------------------------------------
+    # Hjælpefunktion — serialisering
+    # ------------------------------------------------------------------
 
-# ──────────────────────────────────────────────
-# POST /sessions/start
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions/start", methods=["POST"])
-def start_session():
-    data = request.get_json() or {}
+    def session_til_dict(session: ChargingSession) -> dict:
+        """Konverterer et ChargingSession-aggregat til et JSON-serialiserbart dict."""
+        return {
+            "session_id":         session.session_id.value,
+            "user_id":            session.user_id.value,
+            "charger_id":         session.charger_id,
+            "charger_type":       session.charger_type.value,
+            "price_area":         session.price_area,
+            "status":             session.status.value,
+            "applied_spot_price": session.applied_spot_price.value
+                                  if session.applied_spot_price else None,
+            "start_time":         session.start_time.value.isoformat()
+                                  if session.start_time else None,
+            "end_time":           session.end_time.value.isoformat()
+                                  if session.end_time else None,
+            "energy_delivered":   session.energy_delivered.value
+                                  if session.energy_delivered else None,
+            "session_cost":       session.session_cost.value
+                                  if session.session_cost else None,
+            "events": [
+                {
+                    "event_type": evt.event_type.value,
+                    "event_time": evt.event_time.value.isoformat(),
+                }
+                for evt in session.events
+            ],
+        }
 
-    required = ["charger_id", "connector_id", "contract_id", "price_area"]
-    missing = [f for f in required if f not in data]
-    if missing:
-        return jsonify({"error": f"Manglende felter: {missing}"}), 400
-    if data["price_area"] not in {a.value for a in PriceArea}:
-        return jsonify({"error": "price_area skal være 'DK1' eller 'DK2'"}), 400
+    # ------------------------------------------------------------------
+    # Sundhedstjek
+    # ------------------------------------------------------------------
 
-    session = _get_service().start_session(
-        charger_id=data["charger_id"],
-        connector_id=data["connector_id"],
-        contract_id=data["contract_id"],
-        price_area=data["price_area"],
-    )
-    return jsonify({"session_id": session.session_id, "status": session.status}), 201
+    @bp.get("/health")
+    def health() -> Response:
+        """Returnerer 200 OK når servicen kører."""
+        return jsonify({"status": "ok", "service": "charging-session-service"})
 
+    # ------------------------------------------------------------------
+    # POST /sessions — Opret Session
+    # ------------------------------------------------------------------
 
-# ──────────────────────────────────────────────
-# POST /sessions/<id>/authorize
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions/<session_id>/authorize", methods=["POST"])
-def authorize_session(session_id):
-    try:
-        session = _get_service().authorize_session(session_id)
-        return jsonify({"session_id": session_id, "status": session.status})
-    except SessionNotFound:
-        return jsonify({"error": "Session ikke fundet"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    @bp.post("/sessions")
+    def opret_session() -> Response:
+        """
+        Opretter en ny ChargingSession i AFVENTER-tilstand.
 
+        Body (JSON):
+            user_id:      string (påkrævet)
+            charger_id:   string (påkrævet)
+            charger_type: 'Normal Charger' eller 'Fast Charger' (påkrævet)
+            price_area:   'DK1' eller 'DK2' (påkrævet)
 
-# ──────────────────────────────────────────────
-# PUT /sessions/<id>/meter
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions/<session_id>/meter", methods=["PUT"])
-def update_meter(session_id):
-    data = request.get_json() or {}
-    meter_value = data.get("meter_value")
-    if meter_value is None:
-        return jsonify({"error": "meter_value er påkrævet"}), 400
+        Returns:
+            201 Created med session-data
+            400 Bad Request ved manglende/ugyldige felter
+        """
+        body = request.get_json(silent=True) or {}
+        required = ["user_id", "charger_id", "charger_type", "price_area"]
+        missing = [f for f in required if not body.get(f)]
+        if missing:
+            return jsonify({"fejl": f"Manglende felter: {', '.join(missing)}"}), 400
 
-    try:
-        session = _get_service().activate_session(session_id, float(meter_value))
-        return jsonify({
-            "session_id":  session_id,
-            "status":      session.status,
-            "meter_start": session.meter_start,
-        })
-    except SessionNotFound:
-        return jsonify({"error": "Session ikke fundet"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        try:
+            session = service.opret_session(
+                user_id=body["user_id"],
+                charger_id=body["charger_id"],
+                charger_type=body["charger_type"],
+                price_area=body["price_area"],
+            )
+            return jsonify(session_til_dict(session)), 201
+        except (ValueError, KeyError) as exc:
+            return jsonify({"fejl": str(exc)}), 400
 
+    # ------------------------------------------------------------------
+    # POST /sessions/<id>/autoriser — Autoriser Session
+    # ------------------------------------------------------------------
 
-# ──────────────────────────────────────────────
-# POST /sessions/<id>/stop
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions/<session_id>/stop", methods=["POST"])
-def stop_session(session_id):
-    data = request.get_json() or {}
-    meter_end = data.get("meter_end")
-    if meter_end is None:
-        return jsonify({"error": "meter_end er påkrævet"}), 400
+    @bp.post("/sessions/<session_id>/autoriser")
+    def autoriser_session(session_id: str) -> Response:
+        """
+        Autoriserer sessionen og låser AppliedSpotPrice fra Energidataservice.
 
-    try:
-        session = _get_service().stop_session(
-            session_id=session_id,
-            meter_end=float(meter_end),
-            fault=bool(data.get("fault", False)),
-            stop_reason=data.get("stop_reason", "Normal"),
-        )
-        _trigger_forecast(session.charger_id, session_id)
-        return jsonify(session.to_dict()), 200
-    except SessionNotFound:
-        return jsonify({"error": "Session ikke fundet"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        Returns:
+            200 OK med opdateret session
+            404 Not Found hvis session ikke eksisterer
+            400 Bad Request ved ugyldig tilstandsovergang
+        """
+        try:
+            session = service.autoriser_session(session_id)
+            return jsonify(session_til_dict(session))
+        except SessionNotFound as exc:
+            return jsonify({"fejl": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"fejl": str(exc)}), 400
 
+    # ------------------------------------------------------------------
+    # POST /sessions/<id>/start — Start Opladning
+    # ------------------------------------------------------------------
 
-def _trigger_forecast(charger_id: str, session_id: str) -> None:
-    """Sender SessionCompleted event til Load Forecast Service (best-effort)."""
-    url = f"{current_app.config.get('FORECAST_SERVICE_URL', '')}/forecast/trigger"
-    try:
-        resp = http_requests.post(
-            url,
-            json={"session_id": session_id, "charger_id": charger_id},
-            timeout=5,
-        )
-        logger.info("Forecast trigger → HTTP %d for charger=%s", resp.status_code, charger_id)
-    except http_requests.RequestException as exc:
-        logger.warning("Forecast trigger fejlede (ikke kritisk): %s", exc)
+    @bp.post("/sessions/<session_id>/start")
+    def start_opladning(session_id: str) -> Response:
+        """
+        Starter opladningen — session overgår til AKTIV.
 
+        Returns:
+            200 OK med opdateret session
+            404 Not Found
+            400 Bad Request
+        """
+        try:
+            session = service.start_opladning(session_id)
+            return jsonify(session_til_dict(session))
+        except SessionNotFound as exc:
+            return jsonify({"fejl": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"fejl": str(exc)}), 400
 
-# ──────────────────────────────────────────────
-# GET /sessions/<id>
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions/<session_id>", methods=["GET"])
-def get_session(session_id):
-    try:
-        session = _get_service().get_session(session_id)
-        return jsonify(session.to_dict())
-    except SessionNotFound:
-        return jsonify({"error": "Session ikke fundet"}), 404
+    # ------------------------------------------------------------------
+    # POST /sessions/<id>/stop — Stop Opladning
+    # ------------------------------------------------------------------
 
+    @bp.post("/sessions/<session_id>/stop")
+    def stop_opladning(session_id: str) -> Response:
+        """
+        Stopper opladningen og beregner SessionCost.
 
-# ──────────────────────────────────────────────
-# GET /sessions
-# ──────────────────────────────────────────────
-@sessions_bp.route("/sessions", methods=["GET"])
-def get_all_sessions():
-    sessions = _get_service().list_sessions()
-    return jsonify([s.to_dict() for s in sessions])
+        Body (JSON):
+            energy_delivered_kwh: float ≥ 0 (påkrævet)
+
+        Returns:
+            200 OK med session inkl. session_cost
+            404 Not Found
+            400 Bad Request
+        """
+        body = request.get_json(silent=True) or {}
+        if "energy_delivered_kwh" not in body:
+            return jsonify({"fejl": "Manglende felt: energy_delivered_kwh"}), 400
+
+        try:
+            energy = float(body["energy_delivered_kwh"])
+            session = service.stop_opladning(session_id, energy)
+            return jsonify(session_til_dict(session))
+        except SessionNotFound as exc:
+            return jsonify({"fejl": str(exc)}), 404
+        except (ValueError, TypeError) as exc:
+            return jsonify({"fejl": str(exc)}), 400
+
+    # ------------------------------------------------------------------
+    # POST /sessions/<id>/fejl — Registrer Fejl
+    # ------------------------------------------------------------------
+
+    @bp.post("/sessions/<session_id>/fejl")
+    def registrer_fejl(session_id: str) -> Response:
+        """
+        Registrerer en fejl på den aktive session (AKTIV → FEJLET).
+
+        Returns:
+            200 OK med opdateret session
+            404 Not Found
+            400 Bad Request
+        """
+        try:
+            session = service.registrer_fejl(session_id)
+            return jsonify(session_til_dict(session))
+        except SessionNotFound as exc:
+            return jsonify({"fejl": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"fejl": str(exc)}), 400
+
+    # ------------------------------------------------------------------
+    # GET /sessions/<id> — Hent Session
+    # ------------------------------------------------------------------
+
+    @bp.get("/sessions/<session_id>")
+    def hent_session(session_id: str) -> Response:
+        """
+        Henter en enkelt ChargingSession via ChargingSessionID.
+
+        Returns:
+            200 OK med session-data
+            404 Not Found
+        """
+        try:
+            session = service.hent_session(session_id)
+            return jsonify(session_til_dict(session))
+        except SessionNotFound as exc:
+            return jsonify({"fejl": str(exc)}), 404
+
+    # ------------------------------------------------------------------
+    # GET /sessions — Hent alle Sessions
+    # ------------------------------------------------------------------
+
+    @bp.get("/sessions")
+    def hent_alle_sessions() -> Response:
+        """
+        Henter alle ChargingSessions.
+
+        Returns:
+            200 OK med liste af sessions
+        """
+        sessions = service.hent_alle_sessions()
+        return jsonify([session_til_dict(s) for s in sessions])
+
+    return bp
