@@ -93,6 +93,7 @@ jobs:
         with:
           context: ./charging-session-service
           push: true
+          provenance: false
           tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-charging-session:latest
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
@@ -101,5 +102,6 @@ jobs:
         with:
           context: ./load-forecast-service
           push: true
+          provenance: false
           tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-load-forecast:latest
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
