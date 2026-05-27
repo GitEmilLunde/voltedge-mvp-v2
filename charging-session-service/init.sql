@@ -25,26 +25,29 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     end_time            DATETIME        NULL,
     energy_delivered    DECIMAL(10, 4)  NULL     COMMENT 'kWh — aldrig negativ',
     session_cost        DECIMAL(12, 4)  NULL     COMMENT 'DKK = EnergyDelivered × AppliedSpotPrice',
+    charging_status     VARCHAR(15)     NULL     COMMENT 'UNBOTHERED | BOTHERED — sat ved AFSLUTTET eller FEJLET',
     created_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (session_id),
-    INDEX idx_user_id    (user_id),
-    INDEX idx_charger_id (charger_id),
-    INDEX idx_status     (status),
-    INDEX idx_price_area (price_area),
-    INDEX idx_created_at (created_at)
+    INDEX idx_user_id         (user_id),
+    INDEX idx_charger_id      (charger_id),
+    INDEX idx_status          (status),
+    INDEX idx_price_area      (price_area),
+    INDEX idx_charging_status (charging_status),
+    INDEX idx_created_at      (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
 -- Tabel: session_events
 -- Audit trail for Event-entiteter på sessionen.
+-- error_type er kun sat ved UNEXPECTED_STOPPAGE — ellers NULL.
 -- event_id og session_id er database-tekniske nøgler — ikke domæne-felter.
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS session_events (
     event_id    VARCHAR(36)     NOT NULL,
     session_id  VARCHAR(36)     NOT NULL,
-    event_type  VARCHAR(30)     NOT NULL COMMENT 'SESSION_AUTHORIZED | SESSION_STARTED | CHARGING_STOPPED | UNEXPECTED_STOPPAGE',
+    error_type  VARCHAR(20)     NULL     COMMENT 'POWER_LOSS | CONNECTOR_FAULT | NETWORK_ERROR | OVERHEATING | UNKNOWN — NULL hvis ingen fejl',
     event_time  DATETIME        NOT NULL,
 
     PRIMARY KEY (event_id),

@@ -23,10 +23,11 @@ from uuid import uuid4
 from app.domain.value_objects.value_objects import (
     AppliedSpotPrice,
     ChargerType,
+    ChargingStatus,
     EnergyDelivered,
     EndTime,
+    ErrorType,
     EventTime,
-    EventType,
     SessionCost,
     StartTime,
     UserID,
@@ -78,8 +79,9 @@ class Event:
     Entitet der repræsenterer et domæne-event logget under sessionens livscyklus.
 
     Felter (præcist som defineret i DDD-modellen):
-        event_type — klassifikation (EventType value object)
-        event_time — tidsstempel (EventTime value object)
+        event_time  — tidsstempel (EventTime value object)
+        error_type  — fejlklassifikation (ErrorType value object), kun sat
+                      ved UNEXPECTED_STOPPAGE, ellers None.
 
     Database-nøgler (event_id, session_id) genereres udelukkende i
     infrastrukturlaget — de er ikke en del af domænet.
@@ -87,8 +89,8 @@ class Event:
     Event Storming: audit trail for SESSION_AUTHORIZED, SESSION_STARTED,
                     CHARGING_STOPPED, UNEXPECTED_STOPPAGE.
     """
-    event_type: EventType
     event_time: EventTime
+    error_type: Optional[ErrorType] = None
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,8 @@ class ChargingSession:
          EnergyDelivered × AppliedSpotPrice.
       3. EnergyDelivered er aldrig negativ (håndhæves af value object).
       4. Tilstandsovergange følger tilstandsmaskinen — ingen genveje.
+      5. ChargingStatus sættes til UNBOTHERED ved AFSLUTTET,
+         BOTHERED ved FEJLET — aldrig tidligere.
 
     Event Storming kommandoer → metoder:
       Opret Session     → ChargingSession.opret_session(...)  [factory]
@@ -158,6 +162,9 @@ class ChargingSession:
     end_time: Optional[EndTime] = None
     energy_delivered: Optional[EnergyDelivered] = None
     session_cost: Optional[SessionCost] = None
+
+    # Sættes ved AFSLUTTET (UNBOTHERED) eller FEJLET (BOTHERED)
+    charging_status: Optional[ChargingStatus] = None
 
     # Domæne-events til dispatch (renses efter håndtering)
     _pending_events: List[object] = field(default_factory=list)
@@ -213,7 +220,7 @@ class ChargingSession:
             )
         self.applied_spot_price = applied_spot_price
         self.status = SessionStatus.AUTORISERET
-        self._log_event(EventType.SESSION_AUTHORIZED)
+        self._log_event()
 
     def start_opladning(self) -> None:
         """
@@ -231,12 +238,13 @@ class ChargingSession:
             )
         self.start_time = StartTime(value=datetime.now(timezone.utc))
         self.status = SessionStatus.AKTIV
-        self._log_event(EventType.SESSION_STARTED)
+        self._log_event()
 
     def stop_opladning(self, energy_delivered: EnergyDelivered) -> None:
         """
         Overgår sessionen fra AKTIV til AFSLUTTET.
         Beregner SessionCost = EnergyDelivered × AppliedSpotPrice.
+        Sætter ChargingStatus til UNBOTHERED.
 
         Invariant: Kan kun kaldes fra AKTIV-tilstand.
         Invariant: applied_spot_price SKAL være låst (er garanteret af autoriser).
@@ -258,11 +266,13 @@ class ChargingSession:
             value=round(energy_delivered.value * self.applied_spot_price.value, 4)
         )
         self.status = SessionStatus.AFSLUTTET
-        self._log_event(EventType.CHARGING_STOPPED)
+        self.charging_status = ChargingStatus.UNBOTHERED
+        self._log_event()
 
     def registrer_fejl(self) -> None:
         """
         Overgår sessionen fra AKTIV til FEJLET.
+        Sætter ChargingStatus til BOTHERED.
         Kan kun forekomme under aktiv opladning.
 
         Invariant: Kan kun kaldes fra AKTIV-tilstand.
@@ -276,16 +286,20 @@ class ChargingSession:
             )
         self.end_time = EndTime(value=datetime.now(timezone.utc))
         self.status = SessionStatus.FEJLET
-        self._log_event(EventType.UNEXPECTED_STOPPAGE)
+        self.charging_status = ChargingStatus.BOTHERED
+        self._log_event(ErrorType.UNKNOWN)
 
     # ------------------------------------------------------------------
     # Privat hjælpemetode
     # ------------------------------------------------------------------
 
-    def _log_event(self, event_type: EventType) -> None:
-        """Opretter og tilføjer et Event til sessionens audit trail."""
+    def _log_event(self, error_type: Optional[ErrorType] = None) -> None:
+        """
+        Opretter og tilføjer et Event til sessionens audit trail.
+        error_type er kun sat ved UNEXPECTED_STOPPAGE — ellers None.
+        """
         event = Event(
-            event_type=event_type,
             event_time=EventTime(value=datetime.now(timezone.utc)),
+            error_type=error_type,
         )
         self.events.append(event)

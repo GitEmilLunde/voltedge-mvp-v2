@@ -99,11 +99,11 @@ def generer_sessions(antal: int = 120):
 
         if tilstand in ("AUTORISERET", "AKTIV", "AFSLUTTET", "FEJLET"):
             applied_price = spot_price
-            events.append(("SESSION_AUTHORIZED", oprettet + timedelta(minutes=1)))
+            events.append((None, oprettet + timedelta(minutes=1)))
 
         if tilstand in ("AKTIV", "AFSLUTTET", "FEJLET"):
             start_time = oprettet + timedelta(minutes=2)
-            events.append(("SESSION_STARTED", start_time))
+            events.append((None, start_time))
 
         if tilstand == "AFSLUTTET":
             # Normal: 20–60 min, Fast: 10–30 min
@@ -117,12 +117,13 @@ def generer_sessions(antal: int = 120):
                 energy_delivered = round(random.uniform(15.0, 50.0), 2)
 
             session_cost = round(energy_delivered * applied_price, 4)
-            events.append(("CHARGING_STOPPED", end_time))
+            events.append((None, end_time))
 
         elif tilstand == "FEJLET":
             minutter = random.randint(3, 25)
             end_time = start_time + timedelta(minutes=minutter)
-            events.append(("UNEXPECTED_STOPPAGE", end_time))
+            fejl_typer = ["POWER_LOSS", "CONNECTOR_FAULT", "NETWORK_ERROR", "OVERHEATING", "UNKNOWN"]
+            events.append((random.choice(fejl_typer), end_time))
 
         sessions.append({
             "session_id":         session_id,
@@ -137,6 +138,7 @@ def generer_sessions(antal: int = 120):
             "energy_delivered":   energy_delivered,
             "session_cost":       session_cost,
             "created_at":         oprettet,
+            "charging_status":    "UNBOTHERED" if tilstand == "AFSLUTTET" else ("BOTHERED" if tilstand == "FEJLET" else None),
             "events":             events,
         })
 
@@ -155,27 +157,27 @@ def seed(engine) -> None:
                     INSERT IGNORE INTO charging_sessions
                         (session_id, user_id, charger_id, charger_type, price_area,
                          status, applied_spot_price, start_time, end_time,
-                         energy_delivered, session_cost, created_at)
+                         energy_delivered, session_cost, charging_status, created_at)
                     VALUES
                         (:session_id, :user_id, :charger_id, :charger_type, :price_area,
                          :status, :applied_spot_price, :start_time, :end_time,
-                         :energy_delivered, :session_cost, :created_at)
+                         :energy_delivered, :session_cost, :charging_status, :created_at)
                 """),
                 {k: v for k, v in s.items() if k != "events"},
             )
 
-            for event_type, event_time in s["events"]:
+            for error_type, event_time in s["events"]:
                 conn.execute(
                     text("""
                         INSERT IGNORE INTO session_events
-                            (event_id, session_id, event_type, event_time)
+                            (event_id, session_id, error_type, event_time)
                         VALUES
-                            (:event_id, :session_id, :event_type, :event_time)
+                            (:event_id, :session_id, :error_type, :event_time)
                     """),
                     {
                         "event_id":   str(uuid4()),
                         "session_id": s["session_id"],
-                        "event_type": event_type,
+                        "error_type": error_type,
                         "event_time": event_time,
                     },
                 )

@@ -52,9 +52,11 @@ def create_blueprint(service: SessionApplicationService) -> Blueprint:
                                   if session.energy_delivered else None,
             "session_cost":       session.session_cost.value
                                   if session.session_cost else None,
+            "charging_status":    session.charging_status.value
+                                  if session.charging_status else None,
             "events": [
                 {
-                    "event_type": evt.event_type.value,
+                    "error_type": evt.error_type.value if evt.error_type else None,
                     "event_time": evt.event_time.value.isoformat(),
                 }
                 for evt in session.events

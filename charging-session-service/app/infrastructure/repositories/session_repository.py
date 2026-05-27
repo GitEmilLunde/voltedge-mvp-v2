@@ -29,10 +29,11 @@ from app.domain.aggregates.charging_session import (
 from app.domain.value_objects.value_objects import (
     AppliedSpotPrice,
     ChargerType,
+    ChargingStatus,
     EnergyDelivered,
     EndTime,
+    ErrorType,
     EventTime,
-    EventType,
     SessionCost,
     StartTime,
     UserID,
@@ -69,18 +70,19 @@ class SessionRepository:
                     INSERT INTO charging_sessions
                         (session_id, user_id, charger_id, charger_type, price_area, status,
                          applied_spot_price, start_time, end_time,
-                         energy_delivered, session_cost)
+                         energy_delivered, session_cost, charging_status)
                     VALUES
                         (:session_id, :user_id, :charger_id, :charger_type, :price_area, :status,
                          :applied_spot_price, :start_time, :end_time,
-                         :energy_delivered, :session_cost)
+                         :energy_delivered, :session_cost, :charging_status)
                     ON DUPLICATE KEY UPDATE
                         status             = VALUES(status),
                         applied_spot_price = VALUES(applied_spot_price),
                         start_time         = VALUES(start_time),
                         end_time           = VALUES(end_time),
                         energy_delivered   = VALUES(energy_delivered),
-                        session_cost       = VALUES(session_cost)
+                        session_cost       = VALUES(session_cost),
+                        charging_status    = VALUES(charging_status)
                 """),
                 {
                     "session_id":         session.session_id.value,
@@ -99,6 +101,8 @@ class SessionRepository:
                                           if session.energy_delivered else None,
                     "session_cost":       session.session_cost.value
                                           if session.session_cost else None,
+                    "charging_status":    session.charging_status.value
+                                          if session.charging_status else None,
                 },
             )
 
@@ -107,14 +111,14 @@ class SessionRepository:
                 conn.execute(
                     text("""
                         INSERT IGNORE INTO session_events
-                            (event_id, session_id, event_type, event_time)
+                            (event_id, session_id, error_type, event_time)
                         VALUES
-                            (:event_id, :session_id, :event_type, :event_time)
+                            (:event_id, :session_id, :error_type, :event_time)
                     """),
                     {
                         "event_id":   str(uuid4()),
                         "session_id": session.session_id.value,
-                        "event_type": evt.event_type.value,
+                        "error_type": evt.error_type.value if evt.error_type else None,
                         "event_time": evt.event_time.value,
                     },
                 )
@@ -157,7 +161,7 @@ class SessionRepository:
         """Henter alle events for en given session."""
         rows = conn.execute(
             text(
-                "SELECT event_type, event_time FROM session_events "
+                "SELECT error_type, event_time FROM session_events "
                 "WHERE session_id = :sid ORDER BY event_time"
             ),
             {"sid": session_id},
@@ -165,8 +169,8 @@ class SessionRepository:
 
         return [
             Event(
-                event_type=EventType(row["event_type"]),
                 event_time=EventTime(value=self._parse_dt(row["event_time"])),
+                error_type=ErrorType(row["error_type"]) if row["error_type"] else None,
             )
             for row in rows
         ]
@@ -194,6 +198,8 @@ class SessionRepository:
                              if row.get("energy_delivered") is not None else None,
             session_cost=SessionCost(value=float(row["session_cost"]))
                          if row.get("session_cost") is not None else None,
+            charging_status=ChargingStatus(row["charging_status"])
+                            if row.get("charging_status") else None,
         )
 
     @staticmethod

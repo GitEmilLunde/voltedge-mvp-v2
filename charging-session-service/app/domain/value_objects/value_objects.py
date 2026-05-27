@@ -29,18 +29,37 @@ class ChargerType(Enum):
     FAST_CHARGER = "Fast Charger"
 
 
-class EventType(Enum):
+class ErrorType(Enum):
     """
-    Klassifikation af et domæne-event logget på sessionen.
-    Invariant: EventType ∈ {SESSION_AUTHORIZED, SESSION_STARTED,
-                             CHARGING_STOPPED, UNEXPECTED_STOPPAGE}.
+    Fejlklassifikation på et Event — kun sat ved UNEXPECTED_STOPPAGE.
+    Invariant: ErrorType ∈ {POWER_LOSS, CONNECTOR_FAULT, NETWORK_ERROR,
+                             OVERHEATING, UNKNOWN}.
+    I alle andre tilfælde er error_type None på Event-entiteten.
 
-    Hvert element matcher et Event Storming 'orange post-it'.
+    Event Storming event: 'UNEXPECTED_STOPPAGE'.
     """
-    SESSION_AUTHORIZED = "SESSION_AUTHORIZED"
-    SESSION_STARTED = "SESSION_STARTED"
-    CHARGING_STOPPED = "CHARGING_STOPPED"
-    UNEXPECTED_STOPPAGE = "UNEXPECTED_STOPPAGE"
+    POWER_LOSS       = "POWER_LOSS"
+    CONNECTOR_FAULT  = "CONNECTOR_FAULT"
+    NETWORK_ERROR    = "NETWORK_ERROR"
+    OVERHEATING      = "OVERHEATING"
+    UNKNOWN          = "UNKNOWN"
+
+
+class ChargingStatus(Enum):
+    """
+    Statusklassifikation for en afsluttet ChargingSession.
+    Invariant: ChargingStatus ∈ {UNBOTHERED, BOTHERED}.
+
+    UNBOTHERED — sessionen afsluttedes uden fejl (AFSLUTTET).
+    BOTHERED   — en fejl opstod under sessionen (FEJLET).
+
+    Starter som None og sættes kun ved AFSLUTTET eller FEJLET.
+
+    Event Storming events: 'CHARGING_STOPPED' → UNBOTHERED,
+                           'UNEXPECTED_STOPPAGE' → BOTHERED.
+    """
+    UNBOTHERED = "UNBOTHERED"
+    BOTHERED   = "BOTHERED"
 
 
 # ---------------------------------------------------------------------------

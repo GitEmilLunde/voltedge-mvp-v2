@@ -16,8 +16,9 @@ from app.domain.aggregates.charging_session import (
 from app.domain.value_objects.value_objects import (
     AppliedSpotPrice,
     ChargerType,
+    ChargingStatus,
     EnergyDelivered,
-    EventType,
+    ErrorType,
     SessionCost,
     UserID,
 )
@@ -154,6 +155,43 @@ class TestSessionCost:
 
 
 # ---------------------------------------------------------------------------
+# ChargingStatus
+# ---------------------------------------------------------------------------
+
+class TestChargingStatus:
+
+    def test_charging_status_er_none_ved_oprettelse(self):
+        session = ny_session()
+        assert session.charging_status is None
+
+    def test_charging_status_er_unbothered_ved_stop(self):
+        session = ny_session()
+        session.autoriser(AppliedSpotPrice(value=1.25))
+        session.start_opladning()
+        session.stop_opladning(EnergyDelivered(value=10.0))
+        assert session.charging_status == ChargingStatus.UNBOTHERED
+
+    def test_charging_status_er_bothered_ved_fejl(self):
+        session = ny_session()
+        session.autoriser(AppliedSpotPrice(value=1.25))
+        session.start_opladning()
+        session.registrer_fejl()
+        assert session.charging_status == ChargingStatus.BOTHERED
+
+    def test_charging_status_er_none_ved_aktiv(self):
+        session = ny_session()
+        session.autoriser(AppliedSpotPrice(value=1.25))
+        session.start_opladning()
+        assert session.charging_status is None
+
+    def test_charging_status_gyldige_værdier(self):
+        assert ChargingStatus("UNBOTHERED") == ChargingStatus.UNBOTHERED
+        assert ChargingStatus("BOTHERED") == ChargingStatus.BOTHERED
+        with pytest.raises(ValueError):
+            ChargingStatus("NEUTRAL")
+
+
+# ---------------------------------------------------------------------------
 # Value Object invarianter
 # ---------------------------------------------------------------------------
 
@@ -177,9 +215,19 @@ class TestValueObjectInvarianter:
         with pytest.raises(ValueError):
             ChargerType("Super Charger")
 
-    def test_event_type_gyldige_værdier(self):
-        assert EventType("SESSION_AUTHORIZED") == EventType.SESSION_AUTHORIZED
-        assert EventType("CHARGING_STOPPED") == EventType.CHARGING_STOPPED
+    def test_error_type_gyldige_værdier(self):
+        assert ErrorType("POWER_LOSS")      == ErrorType.POWER_LOSS
+        assert ErrorType("CONNECTOR_FAULT") == ErrorType.CONNECTOR_FAULT
+        assert ErrorType("NETWORK_ERROR")   == ErrorType.NETWORK_ERROR
+        assert ErrorType("OVERHEATING")     == ErrorType.OVERHEATING
+        assert ErrorType("UNKNOWN")         == ErrorType.UNKNOWN
+        with pytest.raises(ValueError):
+            ErrorType("EKSPLODERET")
+
+    def test_error_type_er_frozen(self):
+        """ErrorType er en Enum — immutable by design."""
+        with pytest.raises(AttributeError):
+            ErrorType.UNKNOWN = "noget_andet"  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -209,30 +257,45 @@ class TestEventLog:
         session = ny_session()
         assert session.events == []
 
-    def test_session_authorized_event_logges_ved_autorisering(self):
+    def test_event_logges_ved_autorisering(self):
         session = ny_session()
         session.autoriser(AppliedSpotPrice(value=1.0))
-        assert any(e.event_type == EventType.SESSION_AUTHORIZED for e in session.events)
+        assert len(session.events) == 1
+        assert session.events[0].error_type is None
 
-    def test_session_started_event_logges_ved_start(self):
+    def test_event_logges_ved_start(self):
         session = ny_session()
         session.autoriser(AppliedSpotPrice(value=1.0))
         session.start_opladning()
-        assert any(e.event_type == EventType.SESSION_STARTED for e in session.events)
+        assert len(session.events) == 2
+        assert session.events[1].error_type is None
 
-    def test_charging_stopped_event_logges_ved_stop(self):
+    def test_event_logges_ved_stop_uden_error_type(self):
         session = ny_session()
         session.autoriser(AppliedSpotPrice(value=1.0))
         session.start_opladning()
         session.stop_opladning(EnergyDelivered(value=5.0))
-        assert any(e.event_type == EventType.CHARGING_STOPPED for e in session.events)
+        assert len(session.events) == 3
+        assert session.events[2].error_type is None
 
-    def test_unexpected_stoppage_event_logges_ved_fejl(self):
+    def test_event_ved_fejl_har_error_type_unknown(self):
         session = ny_session()
         session.autoriser(AppliedSpotPrice(value=1.0))
         session.start_opladning()
         session.registrer_fejl()
-        assert any(e.event_type == EventType.UNEXPECTED_STOPPAGE for e in session.events)
+        assert len(session.events) == 3
+        assert session.events[2].error_type == ErrorType.UNKNOWN
+
+    def test_kun_fejl_event_har_error_type_sat(self):
+        """Invariant: error_type er None på alle events undtagen UNEXPECTED_STOPPAGE."""
+        session = ny_session()
+        session.autoriser(AppliedSpotPrice(value=1.0))
+        session.start_opladning()
+        session.registrer_fejl()
+        # De to første events (autoriseret + startet) har ingen error_type
+        assert all(e.error_type is None for e in session.events[:2])
+        # Det tredje event (fejl) har error_type sat
+        assert session.events[2].error_type is not None
 
 
 # ---------------------------------------------------------------------------

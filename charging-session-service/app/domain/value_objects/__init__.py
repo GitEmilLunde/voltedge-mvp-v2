@@ -6,7 +6,8 @@ from .value_objects import (
     AppliedSpotPrice,
     SessionCost,
     ChargerType,
-    EventType,
+    ErrorType,
+    ChargingStatus,
     EventTime,
 )
 
@@ -18,6 +19,7 @@ __all__ = [
     "AppliedSpotPrice",
     "SessionCost",
     "ChargerType",
-    "EventType",
+    "ErrorType",
+    "ChargingStatus",
     "EventTime",
 ]
