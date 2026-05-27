@@ -94,6 +94,7 @@ jobs:
           context: ./charging-session-service
           push: true
           tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-charging-session:latest
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - name: Byg og push load-forecast-service
         uses: docker/build-push-action@v6
@@ -101,3 +102,4 @@ jobs:
           context: ./load-forecast-service
           push: true
           tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-load-forecast:latest
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
