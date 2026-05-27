@@ -115,12 +115,7 @@ def generer_sessions(antal: int = 2000):
         # Kun afsluttede sessioner i DB — ~93% AFSLUTTET, ~7% FEJLET
         fejlet = random.random() < 0.07
 
-        # start_time er temporalt anker (spredt over 180 dage via oprettet)
         start_time = oprettet + timedelta(minutes=2)
-        events     = [
-            (None, oprettet + timedelta(minutes=1)),  # autoriseret
-            (None, start_time),                        # startet
-        ]
 
         if not fejlet:
             if charger_type == "Normal Charger":
@@ -130,17 +125,17 @@ def generer_sessions(antal: int = 2000):
                 minutter = random.randint(10, 40)
                 energy_delivered = round(random.uniform(15.0, 60.0), 2)
 
-            end_time     = start_time + timedelta(minutes=minutter)
-            session_cost = round(energy_delivered * spot_price, 4)
+            end_time        = start_time + timedelta(minutes=minutter)
+            session_cost    = round(energy_delivered * spot_price, 4)
             charging_status = "UNBOTHERED"
-            events.append((None, end_time))
+            events          = []  # ingen events — kun BOTHERED gemmer events
         else:
             end_time         = start_time + timedelta(minutes=random.randint(3, 25))
             energy_delivered = None
             session_cost     = None
             charging_status  = "BOTHERED"
             fejl_typer = ["POWER_LOSS", "CONNECTOR_FAULT", "NETWORK_ERROR", "OVERHEATING", "UNKNOWN"]
-            events.append((random.choice(fejl_typer), end_time))
+            events = [(random.choice(fejl_typer), end_time)]
 
         sessions.append({
             "session_id":         session_id,

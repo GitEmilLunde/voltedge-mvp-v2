@@ -37,10 +37,12 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     INDEX idx_end_time        (end_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Kun BOTHERED-sessioners fejlhændelse gemmes.
+-- Én række pr. session — error_type er altid sat.
 CREATE TABLE IF NOT EXISTS session_events (
     event_id    VARCHAR(36)     NOT NULL,
     session_id  VARCHAR(36)     NOT NULL,
-    error_type  VARCHAR(20)     NULL     COMMENT 'Kun sat ved BOTHERED — ellers NULL',
+    error_type  VARCHAR(20)     NOT NULL COMMENT 'POWER_LOSS | CONNECTOR_FAULT | NETWORK_ERROR | OVERHEATING | UNKNOWN',
     event_time  DATETIME        NOT NULL,
 
     PRIMARY KEY (event_id),

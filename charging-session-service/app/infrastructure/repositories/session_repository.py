@@ -107,7 +107,10 @@ class SessionRepository:
                 },
             )
 
+            # Kun fejlhændelser persisteres — events uden error_type gemmes ikke
             for evt in session.events:
+                if evt.error_type is None:
+                    continue
                 conn.execute(
                     text("""
                         INSERT IGNORE INTO session_events
@@ -118,7 +121,7 @@ class SessionRepository:
                     {
                         "event_id":   str(uuid4()),
                         "session_id": session.session_id.value,
-                        "error_type": evt.error_type.value if evt.error_type else None,
+                        "error_type": evt.error_type.value,
                         "event_time": evt.event_time.value,
                     },
                 )
