@@ -2,16 +2,15 @@
 Seed-script — genererer 2000 realistiske ChargingSession-records.
 
 Fordeler sessions over:
-  - 12 ladere (6 Normal Charger, 6 Fast Charger)
-  - 40 brugere
+  - 25 ladere (12 Normal Charger, 13 Fast Charger)
+    → Skæv fordeling: 3–4 hotspot-ladere tager langt størstedelen af trafikken
+  - 100 brugere — jævnt fordelt, ingen aktivitetsniveauer
   - Begge priszoner (DK1 og DK2)
   - De seneste 180 dage (6 måneder)
   - Realistisk dagsmønster (flest sessions morgen og eftermiddag)
   - Alle 5 tilstande repræsenteret (AFVENTER, AUTORISERET, AKTIV, AFSLUTTET, FEJLET)
-  - Sæsonvariation: lavere forbrug sommer, højere vinter
 
 Kører direkte mod MySQL via charging_session_db.
-Bruges ved Docker Compose opstart via init.sql eller manuel kørsel.
 """
 
 import random
@@ -28,29 +27,50 @@ from sqlalchemy.exc import OperationalError
 # ---------------------------------------------------------------------------
 DB_URL = "mysql+pymysql://voltedge:voltedge_pass@localhost:3306/charging_session_db?charset=utf8mb4"
 
-LADERE = [
-    ("charger-001", "Normal Charger"),
-    ("charger-002", "Normal Charger"),
-    ("charger-003", "Normal Charger"),
-    ("charger-004", "Normal Charger"),
-    ("charger-005", "Normal Charger"),
-    ("charger-006", "Normal Charger"),
-    ("charger-007", "Fast Charger"),
-    ("charger-008", "Fast Charger"),
-    ("charger-009", "Fast Charger"),
-    ("charger-010", "Fast Charger"),
-    ("charger-011", "Fast Charger"),
-    ("charger-012", "Fast Charger"),
+# 25 ladere med popularitetsvægte
+# (id, type, vægt) — høj vægt = travl lader
+LADERE_MED_VÆGTE = [
+    # Normal Charger — 12 stk
+    ("charger-001", "Normal Charger", 14),   # travleste Normal Charger
+    ("charger-002", "Normal Charger", 11),
+    ("charger-003", "Normal Charger",  9),
+    ("charger-004", "Normal Charger",  7),
+    ("charger-005", "Normal Charger",  5),
+    ("charger-006", "Normal Charger",  4),
+    ("charger-007", "Normal Charger",  3),
+    ("charger-008", "Normal Charger",  2),
+    ("charger-009", "Normal Charger",  2),
+    ("charger-010", "Normal Charger",  1),
+    ("charger-011", "Normal Charger",  1),
+    ("charger-012", "Normal Charger",  1),
+    # Fast Charger — 13 stk
+    ("charger-013", "Fast Charger",   20),   # absolut travleste lader
+    ("charger-014", "Fast Charger",   16),
+    ("charger-015", "Fast Charger",   13),
+    ("charger-016", "Fast Charger",   10),
+    ("charger-017", "Fast Charger",    7),
+    ("charger-018", "Fast Charger",    5),
+    ("charger-019", "Fast Charger",    4),
+    ("charger-020", "Fast Charger",    3),
+    ("charger-021", "Fast Charger",    2),
+    ("charger-022", "Fast Charger",    2),
+    ("charger-023", "Fast Charger",    1),
+    ("charger-024", "Fast Charger",    1),
+    ("charger-025", "Fast Charger",    1),
 ]
 
-BRUGERE = [f"user-{i:03d}" for i in range(1, 41)]
+LADERE_IDS  = [(cid, ctype) for cid, ctype, _ in LADERE_MED_VÆGTE]
+LADER_VÆGTE = [vægt for _, _, vægt in LADERE_MED_VÆGTE]
+
+# 100 brugere — jævnt fordelt
+BRUGERE = [f"user-{i:03d}" for i in range(1, 101)]
 
 PRISZONER = ["DK1", "DK2"]
 
 # Spotpriser i DKK/kWh — realistisk dansk interval
 SPOTPRISER = {
-    "DK1": [0.45, 0.62, 0.78, 0.95, 1.10, 1.25, 1.42, 1.58, 1.75, 1.90, 2.10, 2.35],
-    "DK2": [0.50, 0.68, 0.82, 1.00, 1.15, 1.30, 1.48, 1.62, 1.80, 1.95, 2.15, 2.40],
+    "DK1": [0.45, 0.62, 0.78, 0.95, 1.10, 1.25, 1.42, 1.58, 1.75, 1.90, 2.10, 2.35, 2.65, 3.10],
+    "DK2": [0.50, 0.68, 0.82, 1.00, 1.15, 1.30, 1.48, 1.62, 1.80, 1.95, 2.15, 2.40, 2.70, 3.20],
 }
 
 # Vægtet tidsmønster — sandsynlighed pr. time (0–23)
@@ -65,9 +85,9 @@ TIMER = list(range(24))
 
 def vælg_tidspunkt(base_dato: datetime) -> datetime:
     """Vælger et realistisk tidspunkt på base_dato."""
-    time = random.choices(TIMER, weights=TIDSVÆGTE, k=1)[0]
+    t = random.choices(TIMER, weights=TIDSVÆGTE, k=1)[0]
     minutter = random.randint(0, 59)
-    return base_dato.replace(hour=time, minute=minutter, second=0, microsecond=0, tzinfo=timezone.utc)
+    return base_dato.replace(hour=t, minute=minutter, second=0, microsecond=0, tzinfo=timezone.utc)
 
 
 def generer_sessions(antal: int = 2000):
@@ -75,10 +95,15 @@ def generer_sessions(antal: int = 2000):
     sessions = []
     nu = datetime.now(timezone.utc)
 
-    for i in range(antal):
+    for _ in range(antal):
         session_id = str(uuid4())
+
+        # Jævnt fordelte brugere
         user_id = random.choice(BRUGERE)
-        charger_id, charger_type = random.choice(LADERE)
+
+        # Skæv lader-fordeling — populære ladere får langt mere trafik
+        charger_id, charger_type = random.choices(LADERE_IDS, weights=LADER_VÆGTE, k=1)[0]
+
         price_area = random.choice(PRISZONER)
         spot_price = random.choice(SPOTPRISER[price_area])
 
@@ -87,20 +112,21 @@ def generer_sessions(antal: int = 2000):
         base = nu - timedelta(days=dage_tilbage)
         oprettet = vælg_tidspunkt(base)
 
-        # Tilstand fordeling: ~70% AFSLUTTET, ~10% AKTIV, ~8% AUTORISERET, ~7% AFVENTER, ~5% FEJLET
-        tilstand_vægte = [7, 8, 10, 70, 5]
+        # Tilstandsfordeling afspejler historisk data:
+        # AFSLUTTET og FEJLET dominerer — flyktige tilstande (AFVENTER/AUTORISERET/AKTIV)
+        # er kun repræsenteret som de ganske få sessioner der er i gang lige nu.
         tilstand = random.choices(
             ["AFVENTER", "AUTORISERET", "AKTIV", "AFSLUTTET", "FEJLET"],
-            weights=tilstand_vægte,
+            weights=[1, 1, 3, 89, 6],
             k=1,
         )[0]
 
-        applied_price = None
-        start_time = None
-        end_time = None
+        applied_price    = None
+        start_time       = None
+        end_time         = None
         energy_delivered = None
-        session_cost = None
-        events = []
+        session_cost     = None
+        events           = []
 
         if tilstand in ("AUTORISERET", "AKTIV", "AFSLUTTET", "FEJLET"):
             applied_price = spot_price
@@ -111,22 +137,19 @@ def generer_sessions(antal: int = 2000):
             events.append((None, start_time))
 
         if tilstand == "AFSLUTTET":
-            # Normal: 20–60 min, Fast: 10–30 min
-            minutter = random.randint(20, 60) if charger_type == "Normal Charger" else random.randint(10, 30)
-            end_time = start_time + timedelta(minutes=minutter)
-
-            # Normal: 5–22 kWh, Fast: 15–50 kWh
             if charger_type == "Normal Charger":
-                energy_delivered = round(random.uniform(5.0, 22.0), 2)
+                minutter = random.randint(20, 90)
+                energy_delivered = round(random.uniform(4.0, 22.0), 2)
             else:
-                energy_delivered = round(random.uniform(15.0, 50.0), 2)
+                minutter = random.randint(10, 40)
+                energy_delivered = round(random.uniform(15.0, 60.0), 2)
 
+            end_time = start_time + timedelta(minutes=minutter)
             session_cost = round(energy_delivered * applied_price, 4)
             events.append((None, end_time))
 
         elif tilstand == "FEJLET":
-            minutter = random.randint(3, 25)
-            end_time = start_time + timedelta(minutes=minutter)
+            end_time = start_time + timedelta(minutes=random.randint(3, 25))
             fejl_typer = ["POWER_LOSS", "CONNECTOR_FAULT", "NETWORK_ERROR", "OVERHEATING", "UNKNOWN"]
             events.append((random.choice(fejl_typer), end_time))
 
@@ -143,7 +166,8 @@ def generer_sessions(antal: int = 2000):
             "energy_delivered":   energy_delivered,
             "session_cost":       session_cost,
             "created_at":         oprettet,
-            "charging_status":    "UNBOTHERED" if tilstand == "AFSLUTTET" else ("BOTHERED" if tilstand == "FEJLET" else None),
+            "charging_status":    "UNBOTHERED" if tilstand == "AFSLUTTET"
+                                  else ("BOTHERED" if tilstand == "FEJLET" else None),
             "events":             events,
         })
 
