@@ -8,7 +8,7 @@ version: "3.9"
 #   mysql-forecast  — MySQL til forecast_db (port 3308)
 #   charging-session-service  — REST API port 5001
 #   load-forecast-service     — REST API port 5002
-#   seed                      — Engangs seed af 120 ChargingSessions
+#   seed                      — Engangs seed af 2000 ChargingSessions
 # ============================================================
 
 services:

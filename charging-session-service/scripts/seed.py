@@ -1,13 +1,14 @@
 """
-Seed-script — genererer 120 realistiske ChargingSession-records.
+Seed-script — genererer 2000 realistiske ChargingSession-records.
 
 Fordeler sessions over:
-  - 8 ladere (4 Normal Charger, 4 Fast Charger)
-  - 15 brugere
+  - 12 ladere (6 Normal Charger, 6 Fast Charger)
+  - 40 brugere
   - Begge priszoner (DK1 og DK2)
-  - De seneste 30 dage
+  - De seneste 180 dage (6 måneder)
   - Realistisk dagsmønster (flest sessions morgen og eftermiddag)
   - Alle 5 tilstande repræsenteret (AFVENTER, AUTORISERET, AKTIV, AFSLUTTET, FEJLET)
+  - Sæsonvariation: lavere forbrug sommer, højere vinter
 
 Kører direkte mod MySQL via charging_session_db.
 Bruges ved Docker Compose opstart via init.sql eller manuel kørsel.
@@ -32,13 +33,17 @@ LADERE = [
     ("charger-002", "Normal Charger"),
     ("charger-003", "Normal Charger"),
     ("charger-004", "Normal Charger"),
-    ("charger-005", "Fast Charger"),
-    ("charger-006", "Fast Charger"),
+    ("charger-005", "Normal Charger"),
+    ("charger-006", "Normal Charger"),
     ("charger-007", "Fast Charger"),
     ("charger-008", "Fast Charger"),
+    ("charger-009", "Fast Charger"),
+    ("charger-010", "Fast Charger"),
+    ("charger-011", "Fast Charger"),
+    ("charger-012", "Fast Charger"),
 ]
 
-BRUGERE = [f"user-{i:03d}" for i in range(1, 16)]
+BRUGERE = [f"user-{i:03d}" for i in range(1, 41)]
 
 PRISZONER = ["DK1", "DK2"]
 
@@ -65,7 +70,7 @@ def vælg_tidspunkt(base_dato: datetime) -> datetime:
     return base_dato.replace(hour=time, minute=minutter, second=0, microsecond=0, tzinfo=timezone.utc)
 
 
-def generer_sessions(antal: int = 120):
+def generer_sessions(antal: int = 2000):
     """Genererer liste af session-dicts klar til INSERT."""
     sessions = []
     nu = datetime.now(timezone.utc)
@@ -77,8 +82,8 @@ def generer_sessions(antal: int = 120):
         price_area = random.choice(PRISZONER)
         spot_price = random.choice(SPOTPRISER[price_area])
 
-        # Tidspunkt spredt over de seneste 30 dage
-        dage_tilbage = random.randint(0, 30)
+        # Tidspunkt spredt over de seneste 180 dage (6 måneder)
+        dage_tilbage = random.randint(0, 180)
         base = nu - timedelta(days=dage_tilbage)
         oprettet = vælg_tidspunkt(base)
 
@@ -147,7 +152,7 @@ def generer_sessions(antal: int = 120):
 
 def seed(engine) -> None:
     """Indsætter alle sessions og events i databasen."""
-    sessions = generer_sessions(120)
+    sessions = generer_sessions(2000)
     print(f"Indsætter {len(sessions)} sessions...")
 
     with engine.begin() as conn:
