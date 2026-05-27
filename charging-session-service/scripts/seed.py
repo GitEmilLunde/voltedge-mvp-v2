@@ -112,31 +112,17 @@ def generer_sessions(antal: int = 2000):
         base = nu - timedelta(days=dage_tilbage)
         oprettet = vælg_tidspunkt(base)
 
-        # Tilstandsfordeling afspejler historisk data:
-        # AFSLUTTET og FEJLET dominerer — flyktige tilstande (AFVENTER/AUTORISERET/AKTIV)
-        # er kun repræsenteret som de ganske få sessioner der er i gang lige nu.
-        tilstand = random.choices(
-            ["AFVENTER", "AUTORISERET", "AKTIV", "AFSLUTTET", "FEJLET"],
-            weights=[1, 1, 3, 89, 6],
-            k=1,
-        )[0]
+        # Kun afsluttede sessioner i DB — ~93% AFSLUTTET, ~7% FEJLET
+        fejlet = random.random() < 0.07
 
-        applied_price    = None
-        start_time       = None
-        end_time         = None
-        energy_delivered = None
-        session_cost     = None
-        events           = []
+        # start_time er temporalt anker (spredt over 180 dage via oprettet)
+        start_time = oprettet + timedelta(minutes=2)
+        events     = [
+            (None, oprettet + timedelta(minutes=1)),  # autoriseret
+            (None, start_time),                        # startet
+        ]
 
-        if tilstand in ("AUTORISERET", "AKTIV", "AFSLUTTET", "FEJLET"):
-            applied_price = spot_price
-            events.append((None, oprettet + timedelta(minutes=1)))
-
-        if tilstand in ("AKTIV", "AFSLUTTET", "FEJLET"):
-            start_time = oprettet + timedelta(minutes=2)
-            events.append((None, start_time))
-
-        if tilstand == "AFSLUTTET":
+        if not fejlet:
             if charger_type == "Normal Charger":
                 minutter = random.randint(20, 90)
                 energy_delivered = round(random.uniform(4.0, 22.0), 2)
@@ -144,12 +130,15 @@ def generer_sessions(antal: int = 2000):
                 minutter = random.randint(10, 40)
                 energy_delivered = round(random.uniform(15.0, 60.0), 2)
 
-            end_time = start_time + timedelta(minutes=minutter)
-            session_cost = round(energy_delivered * applied_price, 4)
+            end_time     = start_time + timedelta(minutes=minutter)
+            session_cost = round(energy_delivered * spot_price, 4)
+            charging_status = "UNBOTHERED"
             events.append((None, end_time))
-
-        elif tilstand == "FEJLET":
-            end_time = start_time + timedelta(minutes=random.randint(3, 25))
+        else:
+            end_time         = start_time + timedelta(minutes=random.randint(3, 25))
+            energy_delivered = None
+            session_cost     = None
+            charging_status  = "BOTHERED"
             fejl_typer = ["POWER_LOSS", "CONNECTOR_FAULT", "NETWORK_ERROR", "OVERHEATING", "UNKNOWN"]
             events.append((random.choice(fejl_typer), end_time))
 
@@ -159,15 +148,12 @@ def generer_sessions(antal: int = 2000):
             "charger_id":         charger_id,
             "charger_type":       charger_type,
             "price_area":         price_area,
-            "status":             tilstand,
-            "applied_spot_price": applied_price,
+            "applied_spot_price": spot_price,
             "start_time":         start_time,
             "end_time":           end_time,
             "energy_delivered":   energy_delivered,
             "session_cost":       session_cost,
-            "created_at":         oprettet,
-            "charging_status":    "UNBOTHERED" if tilstand == "AFSLUTTET"
-                                  else ("BOTHERED" if tilstand == "FEJLET" else None),
+            "charging_status":    charging_status,
             "events":             events,
         })
 
@@ -185,12 +171,12 @@ def seed(engine) -> None:
                 text("""
                     INSERT IGNORE INTO charging_sessions
                         (session_id, user_id, charger_id, charger_type, price_area,
-                         status, applied_spot_price, start_time, end_time,
-                         energy_delivered, session_cost, charging_status, created_at)
+                         applied_spot_price, start_time, end_time,
+                         energy_delivered, session_cost, charging_status)
                     VALUES
                         (:session_id, :user_id, :charger_id, :charger_type, :price_area,
-                         :status, :applied_spot_price, :start_time, :end_time,
-                         :energy_delivered, :session_cost, :charging_status, :created_at)
+                         :applied_spot_price, :start_time, :end_time,
+                         :energy_delivered, :session_cost, :charging_status)
                 """),
                 {k: v for k, v in s.items() if k != "events"},
             )

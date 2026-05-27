@@ -1,11 +1,13 @@
 """
 SessionRepository — MySQL-persistering for Charging Session Bounded Context.
 
-Ingen domæneregler håndhæves her.
-Al mapping mellem database-rækker og domain-objekter sker i denne fil.
+Kun afsluttede sessioner (AFSLUTTET + FEJLET) persisteres.
+Status er ikke en kolonne i DB — den aflæses af charging_status:
+    UNBOTHERED → SessionStatus.AFSLUTTET
+    BOTHERED   → SessionStatus.FEJLET
 
-Metoder (præcist som defineret i modellen):
-    gem        — INSERT eller UPDATE en session og dens events
+Metoder:
+    gem        — INSERT eller UPDATE en afsluttet session og dens events
     hent       — hent én session via ChargingSessionID
     hent_alle  — hent alle sessions
 """
@@ -48,7 +50,7 @@ class SessionRepository:
     Kommunikerer med charging_session_db via SQLAlchemy.
 
     Tabeller:
-        charging_sessions — én række pr. ChargingSession-aggregat
+        charging_sessions — én række pr. afsluttet ChargingSession-aggregat
         session_events    — én række pr. Event-entitet (ID genereres her)
     """
 
@@ -61,22 +63,22 @@ class SessionRepository:
 
     def gem(self, session: ChargingSession) -> None:
         """
-        Persisterer en ChargingSession og alle dens events.
+        Persisterer en afsluttet ChargingSession og alle dens events.
         Bruger ON DUPLICATE KEY UPDATE — idempotent ved gentagne kald.
+        Status gemmes ikke — aflæses af charging_status ved indlæsning.
         """
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO charging_sessions
-                        (session_id, user_id, charger_id, charger_type, price_area, status,
+                        (session_id, user_id, charger_id, charger_type, price_area,
                          applied_spot_price, start_time, end_time,
                          energy_delivered, session_cost, charging_status)
                     VALUES
-                        (:session_id, :user_id, :charger_id, :charger_type, :price_area, :status,
+                        (:session_id, :user_id, :charger_id, :charger_type, :price_area,
                          :applied_spot_price, :start_time, :end_time,
                          :energy_delivered, :session_cost, :charging_status)
                     ON DUPLICATE KEY UPDATE
-                        status             = VALUES(status),
                         applied_spot_price = VALUES(applied_spot_price),
                         start_time         = VALUES(start_time),
                         end_time           = VALUES(end_time),
@@ -90,7 +92,6 @@ class SessionRepository:
                     "charger_id":         session.charger_id,
                     "charger_type":       session.charger_type.value,
                     "price_area":         session.price_area,
-                    "status":             session.status.value,
                     "applied_spot_price": session.applied_spot_price.value
                                           if session.applied_spot_price else None,
                     "start_time":         session.start_time.value
@@ -106,7 +107,6 @@ class SessionRepository:
                 },
             )
 
-            # Events: generér database-ID her — ikke i domænet
             for evt in session.events:
                 conn.execute(
                     text("""
@@ -124,10 +124,7 @@ class SessionRepository:
                 )
 
     def hent(self, session_id: ChargingSessionID) -> Optional[ChargingSession]:
-        """
-        Henter én ChargingSession og dens events via ChargingSessionID.
-        Returnerer None hvis sessionen ikke eksisterer.
-        """
+        """Henter én afsluttet ChargingSession via ChargingSessionID."""
         with self._engine.connect() as conn:
             row = conn.execute(
                 text("SELECT * FROM charging_sessions WHERE session_id = :sid"),
@@ -141,10 +138,10 @@ class SessionRepository:
             return self._map_til_aggregat(dict(row), events)
 
     def hent_alle(self) -> List[ChargingSession]:
-        """Henter alle ChargingSessions sorteret efter oprettelsestidspunkt."""
+        """Henter alle afsluttede ChargingSessions sorteret efter sluttidspunkt."""
         with self._engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT * FROM charging_sessions ORDER BY created_at DESC")
+                text("SELECT * FROM charging_sessions ORDER BY end_time DESC")
             ).mappings().all()
 
             result = []
@@ -177,14 +174,26 @@ class SessionRepository:
 
     @staticmethod
     def _map_til_aggregat(row: dict, events: List[Event]) -> ChargingSession:
-        """Mapper en database-række til et ChargingSession-aggregat."""
+        """
+        Mapper en database-række til et ChargingSession-aggregat.
+        Status aflæses af charging_status:
+            UNBOTHERED → AFSLUTTET
+            BOTHERED   → FEJLET
+        """
+        charging_status_val = row.get("charging_status")
+        status = (
+            SessionStatus.AFSLUTTET
+            if charging_status_val == "UNBOTHERED"
+            else SessionStatus.FEJLET
+        )
+
         return ChargingSession(
             session_id=ChargingSessionID(value=row["session_id"]),
             user_id=UserID(value=row["user_id"]),
             charger_id=row["charger_id"],
             charger_type=ChargerType(row["charger_type"]),
             price_area=row["price_area"],
-            status=SessionStatus(row["status"]),
+            status=status,
             events=events,
             applied_spot_price=AppliedSpotPrice(value=float(row["applied_spot_price"]))
                                if row.get("applied_spot_price") is not None else None,
@@ -198,8 +207,8 @@ class SessionRepository:
                              if row.get("energy_delivered") is not None else None,
             session_cost=SessionCost(value=float(row["session_cost"]))
                          if row.get("session_cost") is not None else None,
-            charging_status=ChargingStatus(row["charging_status"])
-                            if row.get("charging_status") else None,
+            charging_status=ChargingStatus(charging_status_val)
+                            if charging_status_val else None,
         )
 
     @staticmethod

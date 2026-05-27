@@ -12,35 +12,35 @@ CREATE DATABASE IF NOT EXISTS charging_session_db
 
 USE charging_session_db;
 
+-- Kun afsluttede sessioner persisteres (AFSLUTTET + FEJLET).
+-- Status er ikke en kolonne — den aflæses af charging_status:
+--   UNBOTHERED → AFSLUTTET
+--   BOTHERED   → FEJLET
 CREATE TABLE IF NOT EXISTS charging_sessions (
     session_id          VARCHAR(36)     NOT NULL,
     user_id             VARCHAR(36)     NOT NULL,
     charger_id          VARCHAR(50)     NOT NULL,
     charger_type        VARCHAR(20)     NOT NULL COMMENT 'Normal Charger | Fast Charger',
     price_area          VARCHAR(5)      NOT NULL COMMENT 'DK1 | DK2',
-    status              VARCHAR(15)     NOT NULL COMMENT 'AFVENTER | AUTORISERET | AKTIV | AFSLUTTET | FEJLET',
-    applied_spot_price  DECIMAL(10, 6)  NULL     COMMENT 'DKK/kWh — låst ved SESSION_AUTHORIZED',
-    start_time          DATETIME        NULL,
-    end_time            DATETIME        NULL,
-    energy_delivered    DECIMAL(10, 4)  NULL     COMMENT 'kWh — aldrig negativ',
-    session_cost        DECIMAL(12, 4)  NULL     COMMENT 'DKK = EnergyDelivered × AppliedSpotPrice',
-    charging_status     VARCHAR(15)     NULL     COMMENT 'UNBOTHERED | BOTHERED — sat ved AFSLUTTET eller FEJLET',
-    created_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    applied_spot_price  DECIMAL(10, 6)  NOT NULL COMMENT 'DKK/kWh — låst ved autorisering',
+    start_time          DATETIME        NOT NULL,
+    end_time            DATETIME        NOT NULL,
+    energy_delivered    DECIMAL(10, 4)  NULL     COMMENT 'kWh — NULL ved FEJLET',
+    session_cost        DECIMAL(12, 4)  NULL     COMMENT 'DKK — NULL ved FEJLET',
+    charging_status     VARCHAR(15)     NOT NULL COMMENT 'UNBOTHERED | BOTHERED',
 
     PRIMARY KEY (session_id),
     INDEX idx_user_id         (user_id),
     INDEX idx_charger_id      (charger_id),
-    INDEX idx_status          (status),
     INDEX idx_price_area      (price_area),
     INDEX idx_charging_status (charging_status),
-    INDEX idx_created_at      (created_at)
+    INDEX idx_end_time        (end_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS session_events (
     event_id    VARCHAR(36)     NOT NULL,
     session_id  VARCHAR(36)     NOT NULL,
-    error_type  VARCHAR(20)     NULL     COMMENT 'POWER_LOSS | CONNECTOR_FAULT | NETWORK_ERROR | OVERHEATING | UNKNOWN — NULL hvis ingen fejl',
+    error_type  VARCHAR(20)     NULL     COMMENT 'Kun sat ved BOTHERED — ellers NULL',
     event_time  DATETIME        NOT NULL,
 
     PRIMARY KEY (event_id),
