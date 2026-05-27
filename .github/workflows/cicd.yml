@@ -77,6 +77,10 @@ jobs:
       - name: Tjek kode ud
         uses: actions/checkout@v4
 
+      - name: Sæt lowercase registry-owner
+        id: owner
+        run: echo "value=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Log ind på GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -89,11 +93,11 @@ jobs:
         with:
           context: ./charging-session-service
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/voltedge-charging-session:latest
+          tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-charging-session:latest
 
       - name: Byg og push load-forecast-service
         uses: docker/build-push-action@v6
         with:
           context: ./load-forecast-service
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/voltedge-load-forecast:latest
+          tags: ghcr.io/${{ steps.owner.outputs.value }}/voltedge-load-forecast:latest
