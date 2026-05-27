@@ -4,8 +4,8 @@ version: "3.9"
 # VoltEdge MVP — Docker Compose
 # ============================================================
 # Services:
-#   mysql-charging  — MySQL til charging_session_db (port 3307)
-#   mysql-forecast  — MySQL til forecast_db (port 3308)
+#   mysql             — ét MySQL-instance med begge databaser (port 3308)
+#                       charging_session_db + forecast_db
 #   charging-session-service  — REST API port 5001
 #   load-forecast-service     — REST API port 5002
 #   seed                      — Engangs seed af 2000 ChargingSessions
@@ -14,11 +14,11 @@ version: "3.9"
 services:
 
   # ----------------------------------------------------------
-  # MySQL — charging_session_db
+  # MySQL — charging_session_db + forecast_db
   # ----------------------------------------------------------
-  mysql-charging:
+  mysql:
     image: mysql:8.0
-    container_name: voltedge-mysql-charging
+    container_name: voltedge-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root_pass
@@ -26,33 +26,10 @@ services:
       MYSQL_USER:          voltedge
       MYSQL_PASSWORD:      voltedge_pass
     ports:
-      - "3307:3306"
-    volumes:
-      - mysql_charging_data:/var/lib/mysql
-      - ./charging-session-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uvoltedge", "-pvoltedge_pass"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  # ----------------------------------------------------------
-  # MySQL — forecast_db
-  # ----------------------------------------------------------
-  mysql-forecast:
-    image: mysql:8.0
-    container_name: voltedge-mysql-forecast
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root_pass
-      MYSQL_DATABASE:      forecast_db
-      MYSQL_USER:          voltedge
-      MYSQL_PASSWORD:      voltedge_pass
-    ports:
       - "3308:3306"
     volumes:
-      - mysql_forecast_data:/var/lib/mysql
-      - ./load-forecast-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql_data:/var/lib/mysql
+      - ./charging-session-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uvoltedge", "-pvoltedge_pass"]
       interval: 10s
@@ -71,7 +48,7 @@ services:
     ports:
       - "5001:5001"
     environment:
-      MYSQL_HOST:              mysql-charging
+      MYSQL_HOST:              mysql
       MYSQL_PORT:              3306
       MYSQL_USER:              voltedge
       MYSQL_PASSWORD:          voltedge_pass
@@ -79,7 +56,7 @@ services:
       PORT:                    5001
       SPOT_PRICE_TIMEOUT_SEC:  5
     depends_on:
-      mysql-charging:
+      mysql:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
@@ -95,15 +72,15 @@ services:
       context: ./charging-session-service
       dockerfile: Dockerfile
     container_name: voltedge-seed
-    command: python scripts/seed.py "mysql+pymysql://voltedge:voltedge_pass@mysql-charging:3306/charging_session_db?charset=utf8mb4"
+    command: python scripts/seed.py "mysql+pymysql://voltedge:voltedge_pass@mysql:3306/charging_session_db?charset=utf8mb4"
     environment:
-      MYSQL_HOST:     mysql-charging
+      MYSQL_HOST:     mysql
       MYSQL_PORT:     3306
       MYSQL_USER:     voltedge
       MYSQL_PASSWORD: voltedge_pass
       MYSQL_DATABASE: charging_session_db
     depends_on:
-      mysql-charging:
+      mysql:
         condition: service_healthy
     restart: "no"
 
@@ -119,20 +96,19 @@ services:
     ports:
       - "5002:5002"
     environment:
-      MYSQL_HOST:              mysql-forecast
-      MYSQL_PORT:              3306
-      MYSQL_USER:              voltedge
-      MYSQL_PASSWORD:          voltedge_pass
-      MYSQL_DATABASE:          forecast_db
-      CHARGING_SESSION_URL:    http://charging-session-service:5001
+      MYSQL_HOST:               mysql
+      MYSQL_PORT:               3306
+      MYSQL_USER:               voltedge
+      MYSQL_PASSWORD:           voltedge_pass
+      MYSQL_DATABASE:           forecast_db
+      CHARGING_SESSION_URL:     http://charging-session-service:5001
       SESSION_DATA_TIMEOUT_SEC: 10
-      PORT:                    5002
+      PORT:                     5002
     depends_on:
-      mysql-forecast:
+      mysql:
         condition: service_healthy
       charging-session-service:
         condition: service_healthy
 
 volumes:
-  mysql_charging_data:
-  mysql_forecast_data:
+  mysql_data:

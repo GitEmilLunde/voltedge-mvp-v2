@@ -1,18 +1,17 @@
 -- ============================================================
--- charging_session_db — database-skema
--- Charging Session Bounded Context
+-- VoltEdge MVP — kombineret database-skema
+-- Begge bounded contexts i ét MySQL-instance
 -- ============================================================
 
+-- ------------------------------------------------------------
+-- Charging Session Bounded Context
+-- ------------------------------------------------------------
 CREATE DATABASE IF NOT EXISTS charging_session_db
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
 
 USE charging_session_db;
 
--- ------------------------------------------------------------
--- Tabel: charging_sessions
--- Én række pr. ChargingSession-aggregat.
--- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS charging_sessions (
     session_id          VARCHAR(36)     NOT NULL,
     user_id             VARCHAR(36)     NOT NULL,
@@ -38,12 +37,6 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     INDEX idx_created_at      (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ------------------------------------------------------------
--- Tabel: session_events
--- Audit trail for Event-entiteter på sessionen.
--- error_type er kun sat ved UNEXPECTED_STOPPAGE — ellers NULL.
--- event_id og session_id er database-tekniske nøgler — ikke domæne-felter.
--- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS session_events (
     event_id    VARCHAR(36)     NOT NULL,
     session_id  VARCHAR(36)     NOT NULL,
@@ -57,4 +50,34 @@ CREATE TABLE IF NOT EXISTS session_events (
         FOREIGN KEY (session_id)
         REFERENCES charging_sessions (session_id)
         ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Giv voltedge-brugeren adgang til begge databaser
+GRANT ALL PRIVILEGES ON charging_session_db.* TO 'voltedge'@'%';
+GRANT ALL PRIVILEGES ON forecast_db.*          TO 'voltedge'@'%';
+FLUSH PRIVILEGES;
+
+-- ------------------------------------------------------------
+-- Load Forecast Bounded Context
+-- ------------------------------------------------------------
+CREATE DATABASE IF NOT EXISTS forecast_db
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+USE forecast_db;
+
+CREATE TABLE IF NOT EXISTS forecast_results (
+    forecast_id         VARCHAR(36)     NOT NULL,
+    model_id            VARCHAR(36)     NOT NULL,
+    hour_of_day         TINYINT         NOT NULL COMMENT '0–23',
+    day_of_week         TINYINT         NOT NULL COMMENT '1–7 (1 = mandag)',
+    spot_price          DECIMAL(10, 6)  NOT NULL COMMENT 'DKK/kWh',
+    session_count       INT             NOT NULL COMMENT 'Historisk antal sessions ≥ 0',
+    predicted_count     DECIMAL(10, 2)  NOT NULL COMMENT 'Forudsagt antal sessions ≥ 0',
+    forecast_timestamp  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (forecast_id),
+    INDEX idx_model_id           (model_id),
+    INDEX idx_forecast_timestamp (forecast_timestamp),
+    INDEX idx_hour_dow           (hour_of_day, day_of_week)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
