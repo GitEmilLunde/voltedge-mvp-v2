@@ -56,6 +56,7 @@ class SessionRepository:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+        self._memory: dict[str, ChargingSession] = {}
 
     # ------------------------------------------------------------------
     # Offentlige metoder
@@ -66,7 +67,12 @@ class SessionRepository:
         Persisterer en afsluttet ChargingSession og alle dens events.
         Bruger ON DUPLICATE KEY UPDATE — idempotent ved gentagne kald.
         Status gemmes ikke — aflæses af charging_status ved indlæsning.
+        Sessioner i AFVENTER/AUTORISERET/AKTIV holdes kun i hukommelsen.
         """
+        self._memory[session.session_id.value] = session
+        if session.status not in (SessionStatus.AFSLUTTET, SessionStatus.FEJLET):
+            return
+
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
@@ -127,7 +133,10 @@ class SessionRepository:
                 )
 
     def hent(self, session_id: ChargingSessionID) -> Optional[ChargingSession]:
-        """Henter én afsluttet ChargingSession via ChargingSessionID."""
+        """Henter én ChargingSession — først fra hukommelsen, derefter databasen."""
+        if session_id.value in self._memory:
+            return self._memory[session_id.value]
+
         with self._engine.connect() as conn:
             row = conn.execute(
                 text("SELECT * FROM charging_sessions WHERE session_id = :sid"),
