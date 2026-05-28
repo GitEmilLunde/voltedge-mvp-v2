@@ -1,6 +1,6 @@
 # VoltEdge MVP
 
-**Smart EV Charging Infrastructure — Domain-Driven Design**
+**Example on Charging Infrastructure builded from Events Storming & Domain-Driven Design**
 
 VoltEdge MVP demonstrerer en datadrevet platform til styring og dokumentation af EV-ladesessioner bygget på Domain-Driven Design. Systemet består af to mikroservices der realiserer to bounded contexts: Charging Session Management (core) og Energy Price Integration (supporting). Den data systemet producerer danner grundlag for ekstern analyse og load forecasting i Jupyter Notebook.
 
