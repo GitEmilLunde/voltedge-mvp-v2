@@ -1,0 +1,102 @@
+{
+  "info": {
+    "name": "VoltEdge — Charging Session Service",
+    "_postman_id": "voltedge-charging-session-v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5001",
+      "type": "string"
+    },
+    {
+      "key": "session_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/health"
+      }
+    },
+    {
+      "name": "Opret Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 201) {",
+              "    const id = pm.response.json().session_id;",
+              "    pm.collectionVariables.set('session_id', id);",
+              "    console.log('session_id sat til:', id);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"user-001\",\n  \"charger_id\": \"charger-001\",\n  \"charger_type\": \"Normal Charger\",\n  \"price_area\": \"DK1\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Autoriser Session",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/sessions/{{session_id}}/autoriser"
+      }
+    },
+    {
+      "name": "Start Opladning",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/sessions/{{session_id}}/start"
+      }
+    },
+    {
+      "name": "Stop Opladning",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/sessions/{{session_id}}/stop",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"energy_delivered_kwh\": 15.5\n}"
+        }
+      }
+    },
+    {
+      "name": "Registrer Fejl",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/sessions/{{session_id}}/fejl"
+      }
+    },
+    {
+      "name": "Hent Session",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/sessions/{{session_id}}"
+      }
+    },
+    {
+      "name": "Hent alle Sessions",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/sessions"
+      }
+    }
+  ]
+}
