@@ -1,13 +1,12 @@
 """
 SessionRepository — MySQL-persistering for Charging Session Bounded Context.
 
-Kun afsluttede sessioner (AFSLUTTET + FEJLET) persisteres.
-Status er ikke en kolonne i DB — den aflæses af charging_status:
-    UNBOTHERED → SessionStatus.AFSLUTTET
-    BOTHERED   → SessionStatus.FEJLET
+Alle sessioner persisteres uanset livscyklusstatus.
+status-kolonnen holder AFVENTER/AUTORISERET/AKTIV/AFSLUTTET/FEJLET direkte.
+charging_status (UNBOTHERED/BOTHERED) er separat EV-tilstand — kun sat ved afslutning.
 
 Metoder:
-    gem        — INSERT eller UPDATE en afsluttet session og dens events
+    gem        — INSERT eller UPDATE en session og dens events
     hent       — hent én session via ChargingSessionID
     hent_alle  — hent alle sessions
 """
@@ -50,7 +49,7 @@ class SessionRepository:
     Kommunikerer med charging_session_db via SQLAlchemy.
 
     Tabeller:
-        charging_sessions — én række pr. afsluttet ChargingSession-aggregat
+        charging_sessions — én række pr. ChargingSession-aggregat (alle statuser)
         session_events    — én række pr. Event-entitet (ID genereres her)
     """
 
@@ -64,27 +63,25 @@ class SessionRepository:
 
     def gem(self, session: ChargingSession) -> None:
         """
-        Persisterer en afsluttet ChargingSession og alle dens events.
+        Persisterer en ChargingSession og alle dens events til DB.
         Bruger ON DUPLICATE KEY UPDATE — idempotent ved gentagne kald.
-        Status gemmes ikke — aflæses af charging_status ved indlæsning.
-        Sessioner i AFVENTER/AUTORISERET/AKTIV holdes kun i hukommelsen.
+        Holder også sessionen i _memory som hurtig cache.
         """
         self._memory[session.session_id.value] = session
-        if session.status not in (SessionStatus.AFSLUTTET, SessionStatus.FEJLET):
-            return
 
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO charging_sessions
                         (session_id, user_id, charger_id, charger_type, price_area,
-                         applied_spot_price, start_time, end_time,
+                         status, applied_spot_price, start_time, end_time,
                          energy_delivered, session_cost, charging_status)
                     VALUES
                         (:session_id, :user_id, :charger_id, :charger_type, :price_area,
-                         :applied_spot_price, :start_time, :end_time,
+                         :status, :applied_spot_price, :start_time, :end_time,
                          :energy_delivered, :session_cost, :charging_status)
                     ON DUPLICATE KEY UPDATE
+                        status             = VALUES(status),
                         applied_spot_price = VALUES(applied_spot_price),
                         start_time         = VALUES(start_time),
                         end_time           = VALUES(end_time),
@@ -98,6 +95,7 @@ class SessionRepository:
                     "charger_id":         session.charger_id,
                     "charger_type":       session.charger_type.value,
                     "price_area":         session.price_area,
+                    "status":             session.status.value,
                     "applied_spot_price": session.applied_spot_price.value
                                           if session.applied_spot_price else None,
                     "start_time":         session.start_time.value
@@ -193,11 +191,7 @@ class SessionRepository:
             BOTHERED   → FEJLET
         """
         charging_status_val = row.get("charging_status")
-        status = (
-            SessionStatus.AFSLUTTET
-            if charging_status_val == "UNBOTHERED"
-            else SessionStatus.FEJLET
-        )
+        status = SessionStatus(row["status"])
 
         return ChargingSession(
             session_id=ChargingSessionID(value=row["session_id"]),
