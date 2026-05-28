@@ -17,4 +17,4 @@ ENV FLASK_APP=app.main:create_app
 
 EXPOSE 5001
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5001", "--workers", "2", "--timeout", "60", "app.main:create_app()"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5001", "--workers", "1", "--timeout", "60", "app.main:create_app()"]
