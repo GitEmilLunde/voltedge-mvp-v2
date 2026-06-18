@@ -242,8 +242,8 @@
               "    pm.expect(json.status).to.eql(\"AFSLUTTET\");",
               "});",
               "",
-              "pm.test(\"4 events i audit trail\", function () {",
-              "    pm.expect(json.events.length).to.eql(4);",
+              "pm.test(\"3 events i audit trail\", function () {",
+              "    pm.expect(json.events.length).to.eql(3);",
               "});",
               "",
               "console.log(\"=== SESSIONRESULTAT ===\");",
@@ -260,82 +260,6 @@
         }
       ],
       "response": []
-    },
-    {
-      "name": "— ENKELT-KALD —",
-      "item": [
-        {
-          "name": "Hent alle Sessions",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/sessions",
-              "host": ["{{base_url}}"],
-              "path": ["sessions"]
-            },
-            "description": "Returnerer alle ChargingSessions i databasen (inkl. seeded data)."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"200 OK\", function () { pm.response.to.have.status(200); });",
-                  "console.log(\"Antal sessions:\", pm.response.json().length);"
-                ]
-              }
-            }
-          ],
-          "response": []
-        },
-        {
-          "name": "Hent Session (manuelt ID)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/sessions/{{session_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["sessions", "{{session_id}}"]
-            },
-            "description": "Henter én session. Bruges til at inspicere tilstand undervejs."
-          },
-          "response": []
-        },
-        {
-          "name": "Registrer Fejl (alternativ sti)",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/sessions/{{session_id}}/fejl",
-              "host": ["{{base_url}}"],
-              "path": ["sessions", "{{session_id}}", "fejl"]
-            },
-            "description": "Registrerer en fejl på en AKTIV session → FEJLET.\nChargingStatus sættes til BOTHERED.\n\nBrug kun dette i stedet for 05-Stop hvis du vil teste fejl-stien."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"200 OK\", function () { pm.response.to.have.status(200); });",
-                  "pm.test(\"Status er FEJLET\", function () {",
-                  "    pm.expect(pm.response.json().status).to.eql(\"FEJLET\");",
-                  "});",
-                  "pm.test(\"charging_status er BOTHERED\", function () {",
-                  "    pm.expect(pm.response.json().charging_status).to.eql(\"BOTHERED\");",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "response": []
-        }
-      ]
     }
   ]
 }
