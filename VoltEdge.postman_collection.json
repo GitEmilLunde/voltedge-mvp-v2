@@ -1,0 +1,341 @@
+{
+  "info": {
+    "name": "VoltEdge MVP",
+    "_postman_id": "voltedge-mvp-collection",
+    "description": "Komplet simulering af en EV-ladesession via VoltEdge MVP API.\n\nRækkefølge for fuld session:\n1. Health\n2. Opret Session        → fanger session_id automatisk\n3. Autoriser Session    → låser spotpris fra Energidataservice\n4. Start Opladning      → AUTORISERET → AKTIV\n5. Stop Opladning       → AKTIV → AFSLUTTET (beregner pris)\n6. Hent Session         → bekræft slutresultat\n\nKræver environment: VoltEdge Local (medfølger som separat fil).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [],
+  "item": [
+    {
+      "name": "01 – Sundhedstjek",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Bekræft at charging-session-service kører.\nForventet svar: 200 OK med {\"status\": \"ok\"}."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Service kører (200 OK)\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test(\"Status er ok\", function () {",
+              "    pm.expect(pm.response.json().status).to.eql(\"ok\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "02 – Opret Session",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"user-001\",\n  \"charger_id\": \"charger-001\",\n  \"charger_type\": \"Normal Charger\",\n  \"price_area\": \"DK2\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/sessions",
+          "host": ["{{base_url}}"],
+          "path": ["sessions"]
+        },
+        "description": "Opretter en ny ChargingSession i AFVENTER-tilstand.\n\nFelter:\n  user_id:      bruger-identifikator\n  charger_id:   lader-identifikator\n  charger_type: 'Normal Charger' eller 'Fast Charger'\n  price_area:   'DK1' eller 'DK2'\n\nSession-ID gemmes automatisk i {{session_id}} via Test-scriptet."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Session oprettet (201 Created)\", function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "if (pm.response.code === 201) {",
+              "    const json = pm.response.json();",
+              "    pm.environment.set(\"session_id\", json.session_id);",
+              "    console.log(\"session_id gemt:\", json.session_id);",
+              "}",
+              "",
+              "pm.test(\"Status er AFVENTER\", function () {",
+              "    pm.expect(pm.response.json().status).to.eql(\"AFVENTER\");",
+              "});",
+              "",
+              "pm.test(\"applied_spot_price er null (endnu ikke autoriseret)\", function () {",
+              "    pm.expect(pm.response.json().applied_spot_price).to.be.null;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "03 – Autoriser Session",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/autoriser",
+          "host": ["{{base_url}}"],
+          "path": ["sessions", "{{session_id}}", "autoriser"]
+        },
+        "description": "Autoriserer sessionen og låser AppliedSpotPrice fra Energidataservice.\n\nHvis spotpris = 1.25 → API-fejl, fallback aktiveret (se Docker-log).\nHvis spotpris ≠ 1.25 → live spotpris hentet korrekt."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Autorisering lykkedes (200 OK)\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Status er AUTORISERET\", function () {",
+              "    pm.expect(pm.response.json().status).to.eql(\"AUTORISERET\");",
+              "});",
+              "",
+              "pm.test(\"applied_spot_price er låst (ikke null)\", function () {",
+              "    pm.expect(pm.response.json().applied_spot_price).to.not.be.null;",
+              "});",
+              "",
+              "const pris = pm.response.json().applied_spot_price;",
+              "if (pris === 1.25) {",
+              "    console.warn(\"ADVARSEL: Fallback-pris 1.25 DKK/kWh aktiveret — tjek Docker-log for fejl\");",
+              "} else {",
+              "    console.log(\"Live spotpris låst:\", pris, \"DKK/kWh\");",
+              "}"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "04 – Start Opladning",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/start",
+          "host": ["{{base_url}}"],
+          "path": ["sessions", "{{session_id}}", "start"]
+        },
+        "description": "Starter opladningen — sessionen overgår fra AUTORISERET til AKTIV.\nSætter start_time på sessionen."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Opladning startet (200 OK)\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Status er AKTIV\", function () {",
+              "    pm.expect(pm.response.json().status).to.eql(\"AKTIV\");",
+              "});",
+              "",
+              "pm.test(\"start_time er sat\", function () {",
+              "    pm.expect(pm.response.json().start_time).to.not.be.null;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "05 – Stop Opladning",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"energy_delivered_kwh\": 27.5\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/stop",
+          "host": ["{{base_url}}"],
+          "path": ["sessions", "{{session_id}}", "stop"]
+        },
+        "description": "Stopper opladningen og beregner SessionCost.\n\nSessionCost = energy_delivered_kwh × applied_spot_price\n\nEksempel: 27.5 kWh × 0.85 DKK/kWh = 23.375 DKK"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Opladning stoppet (200 OK)\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Status er AFSLUTTET\", function () {",
+              "    pm.expect(pm.response.json().status).to.eql(\"AFSLUTTET\");",
+              "});",
+              "",
+              "pm.test(\"charging_status er UNBOTHERED\", function () {",
+              "    pm.expect(pm.response.json().charging_status).to.eql(\"UNBOTHERED\");",
+              "});",
+              "",
+              "pm.test(\"session_cost er beregnet\", function () {",
+              "    pm.expect(pm.response.json().session_cost).to.not.be.null;",
+              "});",
+              "",
+              "pm.test(\"energy_delivered er korrekt\", function () {",
+              "    pm.expect(pm.response.json().energy_delivered).to.eql(27.5);",
+              "});",
+              "",
+              "const json = pm.response.json();",
+              "const forventet = Math.round(27.5 * json.applied_spot_price * 10000) / 10000;",
+              "console.log(\"Pris:\", json.applied_spot_price, \"DKK/kWh × 27.5 kWh =\", json.session_cost, \"DKK (user-001 / charger-001 / DK2)\");"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "06 – Hent Session (slutresultat)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["sessions", "{{session_id}}"]
+        },
+        "description": "Henter den afsluttede session og bekræfter det fulde resultat:\n  - status: AFSLUTTET\n  - applied_spot_price: låst spotpris\n  - energy_delivered: leveret energi i kWh\n  - session_cost: total pris i DKK\n  - events: audit trail med 4 events"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Session fundet (200 OK)\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const json = pm.response.json();",
+              "",
+              "pm.test(\"Status er AFSLUTTET\", function () {",
+              "    pm.expect(json.status).to.eql(\"AFSLUTTET\");",
+              "});",
+              "",
+              "pm.test(\"4 events i audit trail\", function () {",
+              "    pm.expect(json.events.length).to.eql(4);",
+              "});",
+              "",
+              "console.log(\"=== SESSIONRESULTAT ===\");",
+              "console.log(\"Session ID:    \", json.session_id);",
+              "console.log(\"Bruger:        \", json.user_id);",
+              "console.log(\"Lader:         \", json.charger_id);",
+              "console.log(\"Priszone:      \", json.price_area);",
+              "console.log(\"Spotpris låst: \", json.applied_spot_price, \"DKK/kWh\");",
+              "console.log(\"Energi:        \", json.energy_delivered, \"kWh\");",
+              "console.log(\"Total pris:    \", json.session_cost, \"DKK\");",
+              "console.log(\"Status:        \", json.status);"
+            ]
+          }
+        }
+      ],
+      "response": []
+    },
+    {
+      "name": "— ENKELT-KALD —",
+      "item": [
+        {
+          "name": "Hent alle Sessions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions",
+              "host": ["{{base_url}}"],
+              "path": ["sessions"]
+            },
+            "description": "Returnerer alle ChargingSessions i databasen (inkl. seeded data)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () { pm.response.to.have.status(200); });",
+                  "console.log(\"Antal sessions:\", pm.response.json().length);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Hent Session (manuelt ID)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}"]
+            },
+            "description": "Henter én session. Bruges til at inspicere tilstand undervejs."
+          },
+          "response": []
+        },
+        {
+          "name": "Registrer Fejl (alternativ sti)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/fejl",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}", "fejl"]
+            },
+            "description": "Registrerer en fejl på en AKTIV session → FEJLET.\nChargingStatus sættes til BOTHERED.\n\nBrug kun dette i stedet for 05-Stop hvis du vil teste fejl-stien."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Status er FEJLET\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"FEJLET\");",
+                  "});",
+                  "pm.test(\"charging_status er BOTHERED\", function () {",
+                  "    pm.expect(pm.response.json().charging_status).to.eql(\"BOTHERED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

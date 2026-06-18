@@ -106,7 +106,7 @@ class SpotPriceRecord:
 
 _ENERGIDATA_URL = (
     "https://api.energidataservice.dk/dataset/DayAheadPrices"
-    "?limit=5&sort=HourDK desc"
+    "?limit=5&sort=TimeDK desc"
 )
 
 # Fallback-pris brugt ved API-fejl (gennemsnitlig dansk spotpris DKK/kWh)
@@ -158,16 +158,16 @@ class SpotPriceClient:
 
             # Hent den seneste record
             record = records[0]
-            spot_price_mwh: Optional[float] = record.get("SpotPriceDKK")
+            spot_price_mwh: Optional[float] = record.get("DayAheadPriceDKK")
 
             if spot_price_mwh is None:
-                logger.warning("SpotPriceDKK mangler i response — bruger fallback")
+                logger.warning("DayAheadPriceDKK mangler i response — bruger fallback")
                 return self._fallback(price_area)
 
             # Energidataservice returnerer DKK/MWh → konverter til DKK/kWh
             spot_price_kwh = max(spot_price_mwh / 1000.0, 0.0)
 
-            hour_dk_str: str = record.get("HourDK", "")
+            hour_dk_str: str = record.get("TimeDK", "")
             try:
                 hour_dk = datetime.fromisoformat(hour_dk_str)
             except (ValueError, TypeError):
